@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>LocationMobile</title>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
+        #cesiumContainer { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+        .control-panel { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: 90%; }
+        .btn { padding: 12px 24px; font-size: 16px; font-weight: bold; color: white; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 25px; cursor: pointer; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); transition: all 0.3s ease; touch-action: manipulation; }
+        .btn:active { transform: scale(0.95); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
+        .info-box { position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.7); color: white; padding: 15px 20px; border-radius: 8px; font-size: 14px; max-width: 300px; z-index: 1000; display: none; }
+        .info-box.show { display: block; }
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 18px; z-index: 999; background: rgba(0, 0, 0, 0.7); padding: 20px 40px; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div class="loading" id="loading">LocationMobile 加载中...</div>
+    <div id="cesiumContainer"></div>
+    <div class="info-box" id="infoBox"></div>
+    <div class="control-panel">
+        <button class="btn" onclick="requestLocation()">📍 获取位置</button>
+        <button class="btn" id="trackBtn" onclick="toggleTracking()">🎯 开始跟踪</button>
+        <button class="btn" onclick="clearMarkers()">🗑️ 清除标记</button>
+    </div>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Cesium.js"></script>
+    <script>
+        Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_ACCESS_TOKEN';
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            terrainProvider: Cesium.createWorldTerrain(),
+            timeline: false,
+            animation: false,
+            baseLayerPicker: true,
+            fullscreenButton: false,
+            vrButton: false,
+            geocoder: false,
+            homeButton: true,
+            infoBox: true,
+            sceneModePicker: true,
+            selectionIndicator: true,
+            navigationHelpButton: false,
+            navigationInstructionsInitiallyVisible: false
+        });
+        viewer.cesiumWidget.creditContainer.style.display = "none";
+        let locationMarker = null;
+        let locationHistory = [];
+        let trackLine = null;
+        let isTracking = false;
+        viewer.scene.globe.tileLoadProgressEvent.addEventListener(function(queuedTileCount) {
+            if (queuedTileCount === 0) {
+                document.getElementById('loading').style.display = 'none';
+                logToAndroid('LocationMobile地图加载完成');
+            }
+        });
+        function requestLocation() {
+            showInfo('正在获取位置...');
+            if (typeof Android !== 'undefined' && Android.getLocation) {
+                Android.getLocation();
+            } else {
+                showInfo('请在LocationMobile应用中使用此功能', 3000);
+                console.error('Android接口不可用');
+            }
+        }
+        function toggleTracking() {
+            const trackBtn = document.getElementById('trackBtn');
+            if (!isTracking) {
+                if (typeof Android !== 'undefined' && Android.startTracking) {
+                    Android.startTracking();
+                    isTracking = true;
+                    trackBtn.textContent = '⏸️ 停止跟踪';
+                    trackBtn.style.background = 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)';
+                    showInfo('开始位置跟踪', 2000);
+                }
+            } else {
+                if (typeof Android !== 'undefined' && Android.stopTracking) {
+                    Android.stopTracking();
+                    isTracking = false;
+                    trackBtn.textContent = '🎯 开始跟踪';
+                    trackBtn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+                    showInfo('停止位置跟踪', 2000);
+                }
+            }
+        }
+        function clearMarkers() {
+            if (locationMarker) {
+                viewer.entities.remove(locationMarker);
+                locationMarker = null;
+            }
+            if (trackLine) {
+                viewer.entities.remove(trackLine);
+                trackLine = null;
+            }
+            locationHistory = [];
+            showInfo('已清除所有标记', 2000);
+            logToAndroid('清除所有标记');
+        }
+        function flyToLocation(longitude, latitude, altitude, accuracy = 0, updateType = 'single') {
+            console.log(\`位置更新: 经度=\${longitude}, 纬度=\${latitude}, 海拔=\${altitude}, 精度=\${accuracy}, 类型=\${updateType}\`);
+            const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
+            locationHistory.push(position);
+            if (updateType === 'single' && locationMarker) {
+                viewer.entities.remove(locationMarker);
+            }
+            const markerColor = updateType === 'single' ? Cesium.Color.RED : Cesium.Color.BLUE;
+            const markerSize = updateType === 'single' ? 15 : 12;
+            locationMarker = viewer.entities.add({
+                name: '当前位置',
+                position: position,
+                point: {
+                    pixelSize: markerSize,
+                    color: markerColor,
+                    outlineColor: Cesium.Color.WHITE,
+                    outlineWidth: 3
+                },
+                ellipse: accuracy > 0 ? {
+                    semiMinorAxis: accuracy,
+                    semiMajorAxis: accuracy,
+                    material: Cesium.Color.BLUE.withAlpha(0.2),
+                    outline: true,
+                    outlineColor: Cesium.Color.BLUE.withAlpha(0.5),
+                    outlineWidth: 2
+                } : undefined,
+                label: {
+                    text: updateType === 'single' ? '我的位置' : '当前位置',
+                    font: '14pt sans-serif',
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    outlineWidth: 2,
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset: new Cesium.Cartesian2(0, -20)
+                },
+                description: \`
+                    <div style="padding: 10px;">
+                        <p><strong>经度:</strong> \${longitude.toFixed(6)}</p>
+                        <p><strong>纬度:</strong> \${latitude.toFixed(6)}</p>
+                        <p><strong>海拔:</strong> \${altitude.toFixed(2)} 米</p>
+                        \${accuracy > 0 ? \`<p><strong>精度:</strong> \${accuracy.toFixed(0)} 米</p>\` : ''}
+                        <p><strong>时间:</strong> \${new Date().toLocaleString('zh-CN')}</p>
+                    </div>
+                \`
+            });
+            if (isTracking && locationHistory.length > 1) {
+                updateTrackLine();
+            }
+            if (updateType === 'single') {
+                viewer.camera.flyTo({
+                    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude + 1000),
+                    orientation: {
+                        heading: Cesium.Math.toRadians(0.0),
+                        pitch: Cesium.Math.toRadians(-45.0),
+                        roll: 0.0
+                    },
+                    duration: 3
+                });
+            } else {
+                viewer.camera.flyTo({
+                    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude + 500),
+                    orientation: {
+                        heading: Cesium.Math.toRadians(0.0),
+                        pitch: Cesium.Math.toRadians(-30.0),
+                        roll: 0.0
+                    },
+                    duration: 1.5
+                });
+            }
+            const message = updateType === 'single' 
+                ? \`定位成功!<br>经度: \${longitude.toFixed(6)}<br>纬度: \${latitude.toFixed(6)}\`
+                : \`位置已更新\`;
+            if (updateType === 'single') {
+                showInfo(message, 3000);
+            }
+        }
+        function updateTrackLine() {
+            if (trackLine) {
+                viewer.entities.remove(trackLine);
+            }
+            trackLine = viewer.entities.add({
+                name: '移动轨迹',
+                polyline: {
+                    positions: locationHistory,
+                    width: 3,
+                    material: new Cesium.PolylineGlowMaterialProperty({
+                        glowPower: 0.2,
+                        color: Cesium.Color.CYAN
+                    })
+                }
+            });
+        }
+        function showInfo(message, duration = 0) {
+            const infoBox = document.getElementById('infoBox');
+            infoBox.innerHTML = message;
+            infoBox.classList.add('show');
+            if (duration > 0) {
+                setTimeout(() => {
+                    infoBox.classList.remove('show');
+                }, duration);
+            }
+        }
+        function hideInfo() {
+            document.getElementById('infoBox').classList.remove('show');
+        }
+        function logToAndroid(message) {
+            if (typeof Android !== 'undefined' && Android.log) {
+                Android.log(message);
+            }
+            console.log(message);
+        }
+        viewer.camera.setView({
+            destination: Cesium.Cartesian3.fromDegrees(105.0, 35.0, 5000000.0),
+            orientation: {
+                heading: 0.0,
+                pitch: Cesium.Math.toRadians(-90.0),
+                roll: 0.0
+            }
+        });
+        console.log('LocationMobile地图初始化完成');
+        logToAndroid('LocationMobile地图初始化完成');
+    </script>
+</body>
+</html>

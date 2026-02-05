@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <group
+        android:scaleX="0.06"
+        android:scaleY="0.06"
+        android:translateX="26"
+        android:translateY="26">
+        
+        <!-- 定位图标主体 (白色) -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M508.491294,837.872941S351.623529,689.347765 265.351529,566.226824a301.402353,301.402353 0,0,1 -54.076235,-184.094118A300.197647,300.197647 0,0,1 508.491294,82.672941c161.415529,0 293.842824,131.117176 300.42353,299.459765A300.604235,300.604235 0,0,1 753.92,566.211765c-86.482824,124.837647 -245.428706,271.661176 -245.428706,271.661176z" />
+        
+        <!-- 中心圆点 (紫色) -->
+        <path
+            android:fillColor="#783CF9"
+            android:pathData="M384.346353,381.605647a125.861647,125.861647 0,1,0 125.861647,-125.861647 125.861647,125.861647 0,0,0 -125.861647,125.861647z" />
+    </group>
+</vector>
