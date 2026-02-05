@@ -18,6 +18,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
+import com.example.locationmobile.R
 
 /**
  * 主活动 - 集成Cesium地图和GPS定位功能

@@ -21,7 +21,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
-
+import com.example.locationmobile.R
 /**
  * LocationMobile - 主活动
  * 基于Cesium的移动端定位应用
