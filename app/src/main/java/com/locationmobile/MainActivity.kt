@@ -22,20 +22,21 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.example.locationmobile.R
+
 /**
  * LocationMobile - 主活动
- * 基于Cesium的移动端定位应用
+ * 基于 Cesium 的移动端定位应用
  */
 class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "LocationMobile"
         private const val LOCATION_PERMISSION_REQUEST_CODE = 1001
-        private const val LOCATION_UPDATE_INTERVAL = 5000L // 5秒
-        private const val LOCATION_FASTEST_INTERVAL = 2000L // 2秒
+        private const val LOCATION_UPDATE_INTERVAL = 5000L   // 5 秒
+        private const val LOCATION_FASTEST_INTERVAL = 2000L  // 2 秒
     }
 
-    // WebView组件,用于加载Cesium页面
+    // WebView 组件，用于加载 Cesium 页面
     private lateinit var webView: WebView
 
     // 定位服务客户端
@@ -54,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        Log.d(TAG, "LocationMobile应用启动")
+        Log.d(TAG, "LocationMobile 应用启动")
 
         // 初始化定位客户端
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -62,7 +63,7 @@ class MainActivity : AppCompatActivity() {
         // 初始化定位请求配置
         initLocationRequest()
 
-        // 初始化WebView
+        // 初始化 WebView
         setupWebView()
 
         // 检查并请求定位权限
@@ -85,24 +86,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 配置WebView设置
+     * 配置 WebView 设置
      */
     private fun setupWebView() {
         webView = findViewById(R.id.webView)
 
-        // WebView基础设置
+        // ★ 关键修复：强制开启硬件加速，Cesium 依赖 WebGL，软件渲染无法显示地球
+        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+
         with(webView.settings) {
-            // 启用JavaScript
+            // 启用 JavaScript（Cesium 必须）
             javaScriptEnabled = true
 
-            // 启用DOM存储
+            // 启用 DOM 存储（Cesium 内部使用）
             domStorageEnabled = true
 
-            // 允许访问文件
+            // 允许访问本地文件
             allowFileAccess = true
 
-            // 数据库存储
+            // 启用数据库存储
             databaseEnabled = true
+
+            // ★ 关键修复：允许 file:// 页面发起跨域请求（访问 CDN 上的 Cesium 资源）
+            @Suppress("SetJavaScriptEnabled")
+            allowFileAccessFromFileURLs = true
+            allowUniversalAccessFromFileURLs = true
 
             // 支持缩放
             setSupportZoom(true)
@@ -116,11 +124,11 @@ class MainActivity : AppCompatActivity() {
             // 缓存设置
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
 
-            // 混合内容模式(允许HTTPS页面加载HTTP资源)
+            // ★ 关键修复：允许 HTTPS 页面加载 HTTP 资源（OSM 瓦片等混合内容）
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
-        // 设置WebViewClient,防止在外部浏览器打开链接
+        // 设置 WebViewClient，防止链接跳转到外部浏览器
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
@@ -139,7 +147,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 设置WebChromeClient,支持JavaScript对话框和控制台日志
+        WebView.setWebContentsDebuggingEnabled(true)
+
+        // 设置 WebChromeClient，支持 JavaScript 对话框和控制台日志
         webView.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                 consoleMessage?.let {
@@ -160,22 +170,41 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 添加JavaScript接口,用于Android和网页通信
+        // 添加 JavaScript 接口，用于 Android 与网页双向通信
         webView.addJavascriptInterface(WebAppInterface(), "Android")
 
-        // 加载本地HTML文件
-        webView.loadUrl("file:///android_asset/cesium/index.html")
+        // ★ 关键修复：使用 loadDataWithBaseURL 替代 loadUrl("file://...")
+        //   以 https://localhost/ 作为 baseUrl，使页面以 HTTPS 身份运行，
+        //   彻底解决 file:// 协议下无法加载 CDN 资源（Cesium.js）的跨域问题
+        try {
+            val htmlContent = assets.open("cesium/index.html")
+                .bufferedReader()
+                .use { it.readText() }
 
-        Log.d(TAG, "WebView初始化完成")
+            webView.loadDataWithBaseURL(
+                "https://localhost/",  // baseUrl：赋予页面 HTTPS 身份
+                htmlContent,           // 本地 HTML 内容
+                "text/html",           // MIME 类型
+                "UTF-8",               // 编码
+                null                   // historyUrl
+            )
+            Log.d(TAG, "HTML 内容加载成功")
+        } catch (e: Exception) {
+            // 读取 assets 失败时降级为直接加载 file:// URL
+            Log.e(TAG, "读取 assets 失败，降级为 file:// 方式: ${e.message}")
+            webView.loadUrl("file:///android_asset/cesium/index.html")
+        }
+
+        Log.d(TAG, "WebView 初始化完成")
     }
 
     /**
-     * JavaScript接口类,提供给网页调用的方法
+     * JavaScript 接口类，提供给网页调用的 Android 方法
      */
     inner class WebAppInterface {
 
         /**
-         * 供网页调用的获取单次定位方法
+         * 供网页调用：请求单次定位
          */
         @JavascriptInterface
         fun getLocation() {
@@ -186,7 +215,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 开始持续定位
+         * 供网页调用：开始持续定位
          */
         @JavascriptInterface
         fun startTracking() {
@@ -197,7 +226,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 停止持续定位
+         * 供网页调用：停止持续定位
          */
         @JavascriptInterface
         fun stopTracking() {
@@ -208,7 +237,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 显示Toast消息
+         * 供网页调用：显示 Toast 消息
          */
         @JavascriptInterface
         fun showToast(message: String) {
@@ -218,7 +247,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 记录日志到Android Logcat
+         * 供网页调用：记录日志到 Android Logcat
          */
         @JavascriptInterface
         fun log(message: String) {
@@ -236,7 +265,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) -> {
-                // 用户之前拒绝过权限,显示说明对话框
+                // 用户之前拒绝过权限，显示说明对话框
                 showPermissionRationaleDialog()
             }
 
@@ -263,13 +292,13 @@ class MainActivity : AppCompatActivity() {
     private fun showPermissionRationaleDialog() {
         AlertDialog.Builder(this)
             .setTitle("需要定位权限")
-            .setMessage("LocationMobile需要访问您的位置信息以在地图上显示您的当前位置。")
+            .setMessage("LocationMobile 需要访问您的位置信息以在地图上显示您的当前位置。")
             .setPositiveButton("授予权限") { _, _ ->
                 requestLocationPermission()
             }
             .setNegativeButton("取消") { dialog, _ ->
                 dialog.dismiss()
-                Toast.makeText(this, "没有定位权限,部分功能将无法使用", Toast.LENGTH_LONG)
+                Toast.makeText(this, "没有定位权限，部分功能将无法使用", Toast.LENGTH_LONG)
                     .show()
             }
             .show()
@@ -307,7 +336,7 @@ class MainActivity : AppCompatActivity() {
                     Log.d(TAG, "定位权限已授予")
                     Toast.makeText(
                         this,
-                        "定位权限已授予,可以使用定位功能了",
+                        "定位权限已授予，可以使用定位功能了",
                         Toast.LENGTH_SHORT
                     ).show()
                 } else {
@@ -333,9 +362,8 @@ class MainActivity : AppCompatActivity() {
     private fun showPermissionDeniedDialog() {
         AlertDialog.Builder(this)
             .setTitle("权限被拒绝")
-            .setMessage("定位权限已被永久拒绝,请在系统设置中手动开启。")
+            .setMessage("定位权限已被永久拒绝，请在系统设置中手动开启。")
             .setPositiveButton("去设置") { _, _ ->
-                // 跳转到应用设置页面
                 val intent = Intent(
                     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.fromParts("package", packageName, null)
@@ -347,10 +375,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 请求当前位置(单次定位)
+     * 请求当前位置（单次定位）
      */
     private fun requestCurrentLocation() {
-        // 检查权限
         if (!hasLocationPermission()) {
             Log.w(TAG, "没有定位权限")
             Toast.makeText(this, "请先授予定位权限", Toast.LENGTH_SHORT).show()
@@ -359,7 +386,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         try {
-            // 使用CancellationTokenSource进行单次定位
             val cancellationTokenSource = CancellationTokenSource()
 
             fusedLocationClient.getCurrentLocation(
@@ -370,8 +396,7 @@ class MainActivity : AppCompatActivity() {
             }.addOnFailureListener { exception ->
                 Log.e(TAG, "获取位置失败", exception)
                 showError("获取位置失败: ${exception.message}")
-
-                // 如果获取当前位置失败,尝试获取最后已知位置
+                // 失败时降级为获取最后已知位置
                 getLastKnownLocation()
             }
         } catch (e: SecurityException) {
@@ -381,7 +406,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 获取最后已知位置(作为备选方案)
+     * 获取最后已知位置（备选方案）
      */
     private fun getLastKnownLocation() {
         if (!hasLocationPermission()) return
@@ -395,7 +420,7 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "使用最后已知位置", Toast.LENGTH_SHORT)
                             .show()
                     } else {
-                        showError("无法获取位置信息,请确保GPS已开启")
+                        showError("无法获取位置信息，请确保 GPS 已开启")
                     }
                 }
                 .addOnFailureListener { exception ->
@@ -464,7 +489,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 处理位置更新
+     * 处理位置更新，将坐标通过 JS 传给 Cesium 地图
      */
     private fun handleLocationUpdate(location: Location?, isSingleUpdate: Boolean) {
         if (location == null) {
@@ -483,25 +508,21 @@ class MainActivity : AppCompatActivity() {
             "位置更新: 经度=$longitude, 纬度=$latitude, 海拔=$altitude, 精度=$accuracy"
         )
 
-        // 调用网页中的JavaScript函数
+        // 调用网页中的 JavaScript 函数更新地图
         val updateType = if (isSingleUpdate) "single" else "continuous"
-        val script = """
-            flyToLocation($longitude, $latitude, $altitude, $accuracy, '$updateType')
-        """.trimIndent()
+        val script =
+            "flyToLocation($longitude, $latitude, $altitude, $accuracy, '$updateType')"
 
         webView.evaluateJavascript(script) { result ->
-            Log.v(TAG, "JavaScript执行结果: $result")
-        }
-
-        // 显示提示信息
-        val message = if (isSingleUpdate) {
-            "定位成功 (精度: ${accuracy.toInt()}米)"
-        } else {
-            "位置已更新"
+            Log.v(TAG, "JavaScript 执行结果: $result")
         }
 
         if (isSingleUpdate) {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "定位成功 (精度: ${accuracy.toInt()} 米)",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -526,10 +547,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             isContinuousTracking -> {
-                // 如果正在持续定位,提示用户
                 AlertDialog.Builder(this)
                     .setTitle("退出应用")
-                    .setMessage("正在进行位置跟踪,确定要退出吗?")
+                    .setMessage("正在进行位置跟踪，确定要退出吗？")
                     .setPositiveButton("退出") { _, _ ->
                         stopContinuousLocationUpdates()
                         super.onBackPressed()
@@ -544,17 +564,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 暂停时的处理
-     */
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "应用暂停")
     }
 
-    /**
-     * 恢复时的处理
-     */
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "应用恢复")
@@ -566,11 +580,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "应用销毁")
-
-        // 停止定位更新
         stopContinuousLocationUpdates()
-
-        // 清理WebView
         webView.destroy()
     }
 }
