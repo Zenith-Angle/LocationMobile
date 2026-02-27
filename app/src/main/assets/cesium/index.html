@@ -2,221 +2,531 @@
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LocationMobile</title>
-    <link href="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <link href="https://unpkg.com/cesium@1.112/Build/Cesium/Widgets/widgets.css"
+          rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; }
         #cesiumContainer { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
-        .control-panel { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: 90%; }
-        .btn { padding: 12px 24px; font-size: 16px; font-weight: bold; color: white; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 25px; cursor: pointer; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); transition: all 0.3s ease; touch-action: manipulation; }
-        .btn:active { transform: scale(0.95); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
-        .info-box { position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.7); color: white; padding: 15px 20px; border-radius: 8px; font-size: 14px; max-width: 300px; z-index: 1000; display: none; }
+
+        /* ── 底部按钮栏：三个按钮水平并排 ── */
+        .control-panel {
+            position: absolute;
+            bottom: 28px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            display: flex;
+            flex-direction: row;
+            gap: 10px;
+        }
+        .btn {
+            padding: 11px 18px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            background: rgba(20, 20, 40, 0.75);
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 22px;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+            transition: background 0.2s, transform 0.1s;
+            touch-action: manipulation;
+            white-space: nowrap;
+        }
+        .btn:active { transform: scale(0.94); }
+        .btn.tracking-on {
+            background: rgba(220, 50, 80, 0.75);
+            border-color: rgba(255,100,100,0.4);
+        }
+
+        /* ── 左上角信息框 ── */
+        .info-box {
+            position: absolute;
+            top: 70px;       /* 图层按钮下方 */
+            left: 16px;
+            background: rgba(10,10,25,0.82);
+            color: #e8eaf0;
+            padding: 11px 15px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.7;
+            max-width: 230px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid rgba(255,255,255,0.12);
+            backdrop-filter: blur(8px);
+        }
         .info-box.show { display: block; }
-        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 18px; z-index: 999; background: rgba(0, 0, 0, 0.7); padding: 20px 40px; border-radius: 10px; }
+
+        /* ── 图层按钮（左上角入口） ── */
+        .layer-btn {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            z-index: 1001;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 16px;
+            background: rgba(10,10,25,0.82);
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 22px;
+            color: #e8eaf0;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 4px 18px rgba(0,0,0,0.4);
+            touch-action: manipulation;
+            transition: background 0.2s;
+            user-select: none;
+        }
+        .layer-btn:active { background: rgba(40,40,70,0.9); }
+        .layer-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+        /* ── 图层选择弹出面板 ── */
+        .layer-panel {
+            position: absolute;
+            top: 58px;
+            left: 16px;
+            z-index: 1002;
+            background: rgba(10,10,28,0.92);
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 14px;
+            padding: 8px;
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 190px;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            animation: fadeDown 0.18s ease;
+        }
+        .layer-panel.show { display: flex; }
+
+        @keyframes fadeDown {
+            from { opacity: 0; transform: translateY(-6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 面板内每个地图选项 */
+        .layer-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 13px;
+            border-radius: 9px;
+            cursor: pointer;
+            color: #c8cad8;
+            font-size: 13.5px;
+            font-weight: 500;
+            transition: background 0.15s;
+            touch-action: manipulation;
+        }
+        .layer-option:hover,
+        .layer-option:active { background: rgba(255,255,255,0.08); }
+        /* 激活状态 */
+        .layer-option.active {
+            background: rgba(56, 189, 248, 0.15);
+            color: #7dd3fc;
+        }
+        .layer-option.active .opt-icon { opacity: 1; }
+        .layer-option .opt-icon {
+            font-size: 18px;
+            width: 24px;
+            text-align: center;
+            opacity: 0.7;
+        }
+        .layer-option .opt-label { flex: 1; }
+        /* 已选中的对号 */
+        .layer-option .opt-check {
+            font-size: 13px;
+            color: #38bdf8;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .layer-option.active .opt-check { opacity: 1; }
+
+        /* 面板分割线 */
+        .layer-divider {
+            height: 1px;
+            background: rgba(255,255,255,0.08);
+            margin: 2px 4px;
+        }
+
+        /* ── 加载提示 ── */
+        .loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%,-50%);
+            color: #e8eaf0;
+            font-size: 16px;
+            z-index: 999;
+            background: rgba(10,10,28,0.85);
+            padding: 18px 36px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.1);
+            letter-spacing: 0.5px;
+        }
     </style>
 </head>
 <body>
-    <div class="loading" id="loading">LocationMobile 加载中...</div>
-    <div id="cesiumContainer"></div>
-    <div class="info-box" id="infoBox"></div>
-    <div class="control-panel">
-        <button class="btn" onclick="requestLocation()">📍 获取位置</button>
-        <button class="btn" id="trackBtn" onclick="toggleTracking()">🎯 开始跟踪</button>
-        <button class="btn" onclick="clearMarkers()">🗑️ 清除标记</button>
+
+<div class="loading" id="loading">LocationMobile 加载中…</div>
+<div id="cesiumContainer"></div>
+
+<!-- 左上角信息框 -->
+<div class="info-box" id="infoBox"></div>
+
+<!-- 图层入口按钮 -->
+<button class="layer-btn" id="layerBtn" onclick="toggleLayerPanel()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+        <polyline points="2 17 12 22 22 17"/>
+        <polyline points="2 12 12 17 22 12"/>
+    </svg>
+    图层
+</button>
+
+<!-- 图层选择面板（默认隐藏） -->
+<div class="layer-panel" id="layerPanel">
+    <div class="layer-option active" id="opt-satellite" onclick="switchMap('satellite')">
+        <span class="opt-icon">🛰️</span>
+        <span class="opt-label">卫星影像</span>
+        <span class="opt-check">✓</span>
     </div>
-    <script src="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Cesium.js"></script>
-    <script>
-        Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_ACCESS_TOKEN';
-        const viewer = new Cesium.Viewer('cesiumContainer', {
-            terrainProvider: Cesium.createWorldTerrain(),
-            timeline: false,
-            animation: false,
-            baseLayerPicker: true,
-            fullscreenButton: false,
-            vrButton: false,
-            geocoder: false,
-            homeButton: true,
-            infoBox: true,
-            sceneModePicker: true,
-            selectionIndicator: true,
-            navigationHelpButton: false,
-            navigationInstructionsInitiallyVisible: false
+    <div class="layer-option" id="opt-street" onclick="switchMap('street')">
+        <span class="opt-icon">🗺️</span>
+        <span class="opt-label">街道地图</span>
+        <span class="opt-check">✓</span>
+    </div>
+    <div class="layer-divider"></div>
+    <div class="layer-option" id="opt-tdt" onclick="switchMap('tdt')">
+        <span class="opt-icon">🌏</span>
+        <span class="opt-label">天地图（备用）</span>
+        <span class="opt-check">✓</span>
+    </div>
+</div>
+
+<!-- 底部三按钮并排 -->
+<div class="control-panel">
+    <button class="btn" onclick="requestLocation()">📍 获取位置</button>
+    <button class="btn" id="trackBtn" onclick="toggleTracking()">🎯 开始跟踪</button>
+    <button class="btn" onclick="clearMarkers()">🗑️ 清除标记</button>
+</div>
+
+<script src="https://unpkg.com/cesium@1.112/Build/Cesium/Cesium.js"></script>
+<script>
+    // ── Cesium Ion Token ──────────────────────────────────
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlOTQ2M2Q5Zi1hNTIwLTRhODQtOTBhZS1lYzllOGFkYzQyYTUiLCJpZCI6Mzg2MTE1LCJpYXQiOjE3NzIxOTAwMjd9.JdlVK8FpTJd6SfQC-VnV30kUn77L1xCBL3ruBHUR3mE';
+
+    // ── 天地图 Token（前往 https://console.tianditu.gov.cn 免费申请后填入）──
+    const TDT_TOKEN = '';
+
+    // ── 瓦片源工厂函数 ────────────────────────────────────
+
+    /** 卫星影像：Esri World Imagery（全球高清卫星，无需 Token，国内可用）
+     *  Cesium 1.112 中 ArcGisMapServerImageryProvider 改为异步，
+     *  改用 UrlTemplateImageryProvider 调用 Esri 瓦片接口，兼容所有版本
+     */
+    function createSatelliteProvider() {
+        return new Cesium.UrlTemplateImageryProvider({
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            credit: 'Esri World Imagery',
+            maximumLevel: 19
         });
-        viewer.cesiumWidget.creditContainer.style.display = "none";
-        let locationMarker = null;
-        let locationHistory = [];
-        let trackLine = null;
-        let isTracking = false;
-        viewer.scene.globe.tileLoadProgressEvent.addEventListener(function(queuedTileCount) {
-            if (queuedTileCount === 0) {
-                document.getElementById('loading').style.display = 'none';
-                logToAndroid('LocationMobile地图加载完成');
-            }
+    }
+
+    /** 街道地图：OSM（网络正常时） */
+    function createStreetProvider() {
+        return new Cesium.UrlTemplateImageryProvider({
+            url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            credit: 'OpenStreetMap contributors',
+            maximumLevel: 19
         });
-        function requestLocation() {
-            showInfo('正在获取位置...');
-            if (typeof Android !== 'undefined' && Android.getLocation) {
-                Android.getLocation();
-            } else {
-                showInfo('请在LocationMobile应用中使用此功能', 3000);
-                console.error('Android接口不可用');
+    }
+
+    /** 天地图卫星影像（网络问题时备用，需填 Token） */
+    function createTdtProvider() {
+        return new Cesium.UrlTemplateImageryProvider({
+            url: `https://t{s}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${TDT_TOKEN}`,
+            subdomains: ['0','1','2','3','4','5','6','7'],
+            credit: '天地图',
+            maximumLevel: 18
+        });
+    }
+
+    /** 天地图标注叠加层 */
+    function createTdtLabelProvider() {
+        return new Cesium.UrlTemplateImageryProvider({
+            url: `https://t{s}.tianditu.gov.cn/cia_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${TDT_TOKEN}`,
+            subdomains: ['0','1','2','3','4','5','6','7'],
+            credit: '天地图标注',
+            maximumLevel: 18
+        });
+    }
+
+    // ── 初始化 Viewer（默认卫星影像）────────────────────
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+        imageryProvider: createSatelliteProvider(),
+        baseLayerPicker: false,
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+        timeline: false,
+        animation: false,
+        fullscreenButton: false,
+        vrButton: false,
+        geocoder: false,
+        homeButton: true,
+        infoBox: true,
+        sceneModePicker: true,
+        selectionIndicator: true,
+        navigationHelpButton: false,
+        navigationInstructionsInitiallyVisible: false
+    });
+    viewer.cesiumWidget.creditContainer.style.display = 'none';
+
+    // ── 图层切换逻辑 ─────────────────────────────────────
+    let currentMap = 'satellite';
+
+    /** 切换底图 */
+    function switchMap(mapType) {
+        // 关闭面板
+        closeLayerPanel();
+
+        if (mapType === currentMap) return;
+
+        // 天地图需要 Token 校验
+        if (mapType === 'tdt' && TDT_TOKEN === 'YOUR_TIANDITU_TOKEN') {
+            showInfo('⚠️ 请先在 index.html 中填入天地图 Token', 4000);
+            return;
+        }
+
+        // 替换底图图层
+        viewer.imageryLayers.removeAll();
+        if (mapType === 'satellite') {
+            viewer.imageryLayers.addImageryProvider(createSatelliteProvider());
+        } else if (mapType === 'street') {
+            viewer.imageryLayers.addImageryProvider(createStreetProvider());
+        } else if (mapType === 'tdt') {
+            viewer.imageryLayers.addImageryProvider(createTdtProvider());
+            viewer.imageryLayers.addImageryProvider(createTdtLabelProvider());
+        }
+
+        // 更新选中样式
+        ['satellite','street','tdt'].forEach(id => {
+            document.getElementById(`opt-${id}`)
+                .classList.toggle('active', id === mapType);
+        });
+
+        currentMap = mapType;
+        const names = { satellite:'卫星影像', street:'街道地图', tdt:'天地图' };
+        showInfo(`已切换至 ${names[mapType]}`, 1800);
+    }
+
+    // ── 图层面板开关 ──────────────────────────────────────
+    let layerPanelOpen = false;
+
+    function toggleLayerPanel() {
+        layerPanelOpen = !layerPanelOpen;
+        document.getElementById('layerPanel')
+            .classList.toggle('show', layerPanelOpen);
+    }
+
+    function closeLayerPanel() {
+        layerPanelOpen = false;
+        document.getElementById('layerPanel').classList.remove('show');
+    }
+
+    // 点击地图其他区域时关闭面板
+    document.getElementById('cesiumContainer').addEventListener('click', closeLayerPanel);
+
+    // ── 定位相关变量 ──────────────────────────────────────
+    let locationMarker = null;
+    let locationHistory = [];
+    let trackLine = null;
+    let isTracking = false;
+
+    // 加载完成
+    setTimeout(() => {
+        document.getElementById('loading').style.display = 'none';
+        logToAndroid('LocationMobile地图加载完成');
+    }, 2000);
+
+    // 初始视角：中国上空
+    viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(105.0, 35.0, 5000000.0),
+        orientation: { heading: 0.0, pitch: Cesium.Math.toRadians(-90.0), roll: 0.0 }
+    });
+
+    // ── 按钮功能 ──────────────────────────────────────────
+
+    function requestLocation() {
+        showInfo('正在获取位置…');
+        if (typeof Android !== 'undefined' && Android.getLocation) {
+            Android.getLocation();
+        } else {
+            showInfo('请在 LocationMobile 应用中使用此功能', 3000);
+        }
+    }
+
+    function toggleTracking() {
+        const btn = document.getElementById('trackBtn');
+        if (!isTracking) {
+            if (typeof Android !== 'undefined' && Android.startTracking) {
+                Android.startTracking();
+                isTracking = true;
+                btn.textContent = '⏸️ 停止跟踪';
+                btn.classList.add('tracking-on');
+                showInfo('开始位置跟踪', 2000);
+            }
+        } else {
+            if (typeof Android !== 'undefined' && Android.stopTracking) {
+                Android.stopTracking();
+                isTracking = false;
+                btn.textContent = '🎯 开始跟踪';
+                btn.classList.remove('tracking-on');
+                showInfo('停止位置跟踪', 2000);
             }
         }
-        function toggleTracking() {
-            const trackBtn = document.getElementById('trackBtn');
-            if (!isTracking) {
-                if (typeof Android !== 'undefined' && Android.startTracking) {
-                    Android.startTracking();
-                    isTracking = true;
-                    trackBtn.textContent = '⏸️ 停止跟踪';
-                    trackBtn.style.background = 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)';
-                    showInfo('开始位置跟踪', 2000);
-                }
-            } else {
-                if (typeof Android !== 'undefined' && Android.stopTracking) {
-                    Android.stopTracking();
-                    isTracking = false;
-                    trackBtn.textContent = '🎯 开始跟踪';
-                    trackBtn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-                    showInfo('停止位置跟踪', 2000);
-                }
-            }
+    }
+
+    function clearMarkers() {
+        if (locationMarker) { viewer.entities.remove(locationMarker); locationMarker = null; }
+        if (trackLine)      { viewer.entities.remove(trackLine);      trackLine = null; }
+        locationHistory = [];
+        showInfo('已清除所有标记', 2000);
+        logToAndroid('清除所有标记');
+    }
+
+    // ── 位置更新与飞行 ────────────────────────────────────
+
+    /**
+     * 由 Android 原生调用：更新位置标记并飞行
+     * @param {number} longitude
+     * @param {number} latitude
+     * @param {number} altitude
+     * @param {number} accuracy
+     * @param {string} updateType  'single' | 'continuous'
+     */
+    function flyToLocation(longitude, latitude, altitude, accuracy = 0, updateType = 'single') {
+        console.log(`位置更新: ${longitude}, ${latitude}, alt=${altitude}, acc=${accuracy}, type=${updateType}`);
+
+        const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
+        locationHistory.push(position);
+
+        // 单次定位：移除旧标记
+        if (updateType === 'single' && locationMarker) {
+            viewer.entities.remove(locationMarker);
         }
-        function clearMarkers() {
-            if (locationMarker) {
-                viewer.entities.remove(locationMarker);
-                locationMarker = null;
-            }
-            if (trackLine) {
-                viewer.entities.remove(trackLine);
-                trackLine = null;
-            }
-            locationHistory = [];
-            showInfo('已清除所有标记', 2000);
-            logToAndroid('清除所有标记');
+
+        locationMarker = viewer.entities.add({
+            name: '当前位置',
+            position: position,
+            point: {
+                pixelSize: updateType === 'single' ? 16 : 12,
+                color: updateType === 'single' ? Cesium.Color.fromCssColorString('#ff3b5c')
+                                               : Cesium.Color.fromCssColorString('#38bdf8'),
+                outlineColor: Cesium.Color.WHITE,
+                outlineWidth: 3
+            },
+            ellipse: accuracy > 0 ? {
+                semiMinorAxis: accuracy,
+                semiMajorAxis: accuracy,
+                material: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.12),
+                outline: true,
+                outlineColor: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.5),
+                outlineWidth: 2
+            } : undefined,
+            label: {
+                text: updateType === 'single' ? '我的位置' : '当前位置',
+                font: '13pt sans-serif',
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                outlineWidth: 2,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                pixelOffset: new Cesium.Cartesian2(0, -22)
+            },
+            description: `<div style="padding:10px;font-family:sans-serif;font-size:13px;line-height:1.8;">
+                <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
+                <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
+                <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
+                ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
+                <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
+            </div>`
+        });
+
+        // 持续跟踪时更新轨迹
+        if (isTracking && locationHistory.length > 1) {
+            updateTrackLine();
         }
-        function flyToLocation(longitude, latitude, altitude, accuracy = 0, updateType = 'single') {
-            console.log(\`位置更新: 经度=\${longitude}, 纬度=\${latitude}, 海拔=\${altitude}, 精度=\${accuracy}, 类型=\${updateType}\`);
-            const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
-            locationHistory.push(position);
-            if (updateType === 'single' && locationMarker) {
-                viewer.entities.remove(locationMarker);
-            }
-            const markerColor = updateType === 'single' ? Cesium.Color.RED : Cesium.Color.BLUE;
-            const markerSize = updateType === 'single' ? 15 : 12;
-            locationMarker = viewer.entities.add({
-                name: '当前位置',
-                position: position,
-                point: {
-                    pixelSize: markerSize,
-                    color: markerColor,
-                    outlineColor: Cesium.Color.WHITE,
-                    outlineWidth: 3
-                },
-                ellipse: accuracy > 0 ? {
-                    semiMinorAxis: accuracy,
-                    semiMajorAxis: accuracy,
-                    material: Cesium.Color.BLUE.withAlpha(0.2),
-                    outline: true,
-                    outlineColor: Cesium.Color.BLUE.withAlpha(0.5),
-                    outlineWidth: 2
-                } : undefined,
-                label: {
-                    text: updateType === 'single' ? '我的位置' : '当前位置',
-                    font: '14pt sans-serif',
-                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                    outlineWidth: 2,
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, -20)
-                },
-                description: \`
-                    <div style="padding: 10px;">
-                        <p><strong>经度:</strong> \${longitude.toFixed(6)}</p>
-                        <p><strong>纬度:</strong> \${latitude.toFixed(6)}</p>
-                        <p><strong>海拔:</strong> \${altitude.toFixed(2)} 米</p>
-                        \${accuracy > 0 ? \`<p><strong>精度:</strong> \${accuracy.toFixed(0)} 米</p>\` : ''}
-                        <p><strong>时间:</strong> \${new Date().toLocaleString('zh-CN')}</p>
-                    </div>
-                \`
-            });
-            if (isTracking && locationHistory.length > 1) {
-                updateTrackLine();
-            }
-            if (updateType === 'single') {
-                viewer.camera.flyTo({
-                    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude + 1000),
-                    orientation: {
-                        heading: Cesium.Math.toRadians(0.0),
-                        pitch: Cesium.Math.toRadians(-45.0),
-                        roll: 0.0
-                    },
-                    duration: 3
-                });
-            } else {
-                viewer.camera.flyTo({
-                    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude + 500),
-                    orientation: {
-                        heading: Cesium.Math.toRadians(0.0),
-                        pitch: Cesium.Math.toRadians(-30.0),
-                        roll: 0.0
-                    },
-                    duration: 1.5
-                });
-            }
-            const message = updateType === 'single' 
-                ? \`定位成功!<br>经度: \${longitude.toFixed(6)}<br>纬度: \${latitude.toFixed(6)}\`
-                : \`位置已更新\`;
-            if (updateType === 'single') {
-                showInfo(message, 3000);
-            }
-        }
-        function updateTrackLine() {
-            if (trackLine) {
-                viewer.entities.remove(trackLine);
-            }
-            trackLine = viewer.entities.add({
-                name: '移动轨迹',
-                polyline: {
-                    positions: locationHistory,
-                    width: 3,
-                    material: new Cesium.PolylineGlowMaterialProperty({
-                        glowPower: 0.2,
-                        color: Cesium.Color.CYAN
-                    })
-                }
-            });
-        }
-        function showInfo(message, duration = 0) {
-            const infoBox = document.getElementById('infoBox');
-            infoBox.innerHTML = message;
-            infoBox.classList.add('show');
-            if (duration > 0) {
-                setTimeout(() => {
-                    infoBox.classList.remove('show');
-                }, duration);
-            }
-        }
-        function hideInfo() {
-            document.getElementById('infoBox').classList.remove('show');
-        }
-        function logToAndroid(message) {
-            if (typeof Android !== 'undefined' && Android.log) {
-                Android.log(message);
-            }
-            console.log(message);
-        }
-        viewer.camera.setView({
-            destination: Cesium.Cartesian3.fromDegrees(105.0, 35.0, 5000000.0),
+
+        // ★ 近乎垂直俯视（pitch = -88°），高度 500m / 300m
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+                longitude, latitude,
+                altitude + (updateType === 'single' ? 500 : 300)
+            ),
             orientation: {
-                heading: 0.0,
-                pitch: Cesium.Math.toRadians(-90.0),
-                roll: 0.0
+                heading: Cesium.Math.toRadians(0.0),
+                pitch:   Cesium.Math.toRadians(-88.0),
+                roll:    0.0
+            },
+            duration: updateType === 'single' ? 2.5 : 1.0
+        });
+
+        if (updateType === 'single') {
+            showInfo(
+                `📍 定位成功<br>` +
+                `经度：${longitude.toFixed(5)}<br>` +
+                `纬度：${latitude.toFixed(5)}<br>` +
+                `精度：±${accuracy.toFixed(0)} 米`,
+                4000
+            );
+        }
+    }
+
+    /** 更新轨迹线 */
+    function updateTrackLine() {
+        if (trackLine) { viewer.entities.remove(trackLine); }
+        trackLine = viewer.entities.add({
+            name: '移动轨迹',
+            polyline: {
+                positions: locationHistory,
+                width: 4,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                    glowPower: 0.3,
+                    color: Cesium.Color.fromCssColorString('#38bdf8')
+                })
             }
         });
-        console.log('LocationMobile地图初始化完成');
-        logToAndroid('LocationMobile地图初始化完成');
-    </script>
+    }
+
+    /** 信息框 */
+    function showInfo(message, duration = 0) {
+        const box = document.getElementById('infoBox');
+        box.innerHTML = message;
+        box.classList.add('show');
+        if (duration > 0) {
+            setTimeout(() => box.classList.remove('show'), duration);
+        }
+    }
+
+    /** Android 日志 */
+    function logToAndroid(message) {
+        if (typeof Android !== 'undefined' && Android.log) { Android.log(message); }
+        console.log(message);
+    }
+
+    console.log('LocationMobile地图初始化完成');
+    logToAndroid('LocationMobile地图初始化完成');
+</script>
 </body>
 </html>
