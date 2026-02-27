@@ -19,6 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewAssetLoader
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.example.locationmobile.R
@@ -26,14 +27,20 @@ import com.example.locationmobile.R
 /**
  * LocationMobile - 主活动
  * 基于 Cesium 的移动端定位应用
+ *
+ * 核心修复：使用 WebViewAssetLoader 将 assets 文件映射到
+ * https://appassets.androidplatform.net/assets/ 路径，
+ * 让 WebView 以真正的 HTTPS 身份运行，彻底解决：
+ *   1. file:// 协议下 Cesium Worker blob:null URL 被拦截导致黑屏
+ *   2. Cesium Ion 默认 Token 401 错误
  */
 class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "LocationMobile"
         private const val LOCATION_PERMISSION_REQUEST_CODE = 1001
-        private const val LOCATION_UPDATE_INTERVAL = 5000L   // 5 秒
-        private const val LOCATION_FASTEST_INTERVAL = 2000L  // 2 秒
+        private const val LOCATION_UPDATE_INTERVAL = 5000L  // 5秒
+        private const val LOCATION_FASTEST_INTERVAL = 2000L // 2秒
     }
 
     // WebView 组件，用于加载 Cesium 页面
@@ -50,6 +57,10 @@ class MainActivity : AppCompatActivity() {
 
     // 是否正在持续定位
     private var isContinuousTracking = false
+
+    // ★ 核心修复：WebViewAssetLoader 将 assets 映射为合法的 HTTPS URL
+    // 访问路径：https://appassets.androidplatform.net/assets/cesium/index.html
+    private lateinit var assetLoader: WebViewAssetLoader
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,9 +102,17 @@ class MainActivity : AppCompatActivity() {
     private fun setupWebView() {
         webView = findViewById(R.id.webView)
 
-        // ★ 关键修复：强制开启硬件加速，Cesium 依赖 WebGL，软件渲染无法显示地球
+        // ★ 硬件加速，Cesium/WebGL 渲染必须开启
         webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
+        // ★ 初始化 WebViewAssetLoader
+        // 将 app/src/main/assets 目录映射到 https://appassets.androidplatform.net/assets/
+        // 这样 Cesium Worker 生成的是 blob:https:// 而非 blob:null，不会被安全策略拦截
+        assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
+        // WebView 基础设置
         with(webView.settings) {
             // 启用 JavaScript（Cesium 必须）
             javaScriptEnabled = true
@@ -101,16 +120,11 @@ class MainActivity : AppCompatActivity() {
             // 启用 DOM 存储（Cesium 内部使用）
             domStorageEnabled = true
 
-            // 允许访问本地文件
-            allowFileAccess = true
+            // 使用 AssetLoader 后不再需要 file:// 直接访问
+            allowFileAccess = false
 
-            // 启用数据库存储
+            // 数据库存储
             databaseEnabled = true
-
-            // ★ 关键修复：允许 file:// 页面发起跨域请求（访问 CDN 上的 Cesium 资源）
-            @Suppress("SetJavaScriptEnabled")
-            allowFileAccessFromFileURLs = true
-            allowUniversalAccessFromFileURLs = true
 
             // 支持缩放
             setSupportZoom(true)
@@ -124,12 +138,26 @@ class MainActivity : AppCompatActivity() {
             // 缓存设置
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
 
-            // ★ 关键修复：允许 HTTPS 页面加载 HTTP 资源（OSM 瓦片等混合内容）
+            // 允许 HTTPS 页面加载 HTTP 资源（OSM 瓦片等混合内容）
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
-        // 设置 WebViewClient，防止链接跳转到外部浏览器
+        // 设置 WebViewClient
         webView.webViewClient = object : WebViewClient() {
+
+            /**
+             * ★ 核心修复：拦截所有资源请求
+             * - 本地 assets 请求（https://appassets.androidplatform.net/assets/...）
+             *   由 assetLoader 处理，返回本地文件内容
+             * - 外部请求（CDN 的 Cesium.js、OSM 瓦片等）返回 null 正常放行
+             */
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: android.webkit.WebResourceRequest
+            ): android.webkit.WebResourceResponse? {
+                return assetLoader.shouldInterceptRequest(request.url)
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.d(TAG, "页面加载完成: $url")
@@ -142,12 +170,10 @@ class MainActivity : AppCompatActivity() {
                 failingUrl: String?
             ) {
                 super.onReceivedError(view, errorCode, description, failingUrl)
-                Log.e(TAG, "页面加载错误: $description")
+                Log.e(TAG, "页面加载错误[$errorCode]: $description, url=$failingUrl")
                 showError("页面加载失败: $description")
             }
         }
-
-        WebView.setWebContentsDebuggingEnabled(true)
 
         // 设置 WebChromeClient，支持 JavaScript 对话框和控制台日志
         webView.webChromeClient = object : WebChromeClient() {
@@ -170,36 +196,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 开启 Chrome 远程调试（开发阶段保留，发布前可删除）
+        WebView.setWebContentsDebuggingEnabled(true)
+
         // 添加 JavaScript 接口，用于 Android 与网页双向通信
         webView.addJavascriptInterface(WebAppInterface(), "Android")
 
-        // ★ 关键修复：使用 loadDataWithBaseURL 替代 loadUrl("file://...")
-        //   以 https://localhost/ 作为 baseUrl，使页面以 HTTPS 身份运行，
-        //   彻底解决 file:// 协议下无法加载 CDN 资源（Cesium.js）的跨域问题
-        try {
-            val htmlContent = assets.open("cesium/index.html")
-                .bufferedReader()
-                .use { it.readText() }
-
-            webView.loadDataWithBaseURL(
-                "https://localhost/",  // baseUrl：赋予页面 HTTPS 身份
-                htmlContent,           // 本地 HTML 内容
-                "text/html",           // MIME 类型
-                "UTF-8",               // 编码
-                null                   // historyUrl
-            )
-            Log.d(TAG, "HTML 内容加载成功")
-        } catch (e: Exception) {
-            // 读取 assets 失败时降级为直接加载 file:// URL
-            Log.e(TAG, "读取 assets 失败，降级为 file:// 方式: ${e.message}")
-            webView.loadUrl("file:///android_asset/cesium/index.html")
-        }
+        // ★ 使用 HTTPS 形式的 URL 加载本地 index.html
+        // 对应文件路径：app/src/main/assets/cesium/index.html
+        webView.loadUrl("https://appassets.androidplatform.net/assets/cesium/index.html")
 
         Log.d(TAG, "WebView 初始化完成")
     }
 
     /**
-     * JavaScript 接口类，提供给网页调用的 Android 方法
+     * JavaScript 接口类，提供给网页调用的 Android 原生方法
      */
     inner class WebAppInterface {
 
@@ -215,7 +226,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 供网页调用：开始持续定位
+         * 供网页调用：开始持续定位跟踪
          */
         @JavascriptInterface
         fun startTracking() {
@@ -226,7 +237,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 供网页调用：停止持续定位
+         * 供网页调用：停止持续定位跟踪
          */
         @JavascriptInterface
         fun stopTracking() {
@@ -364,6 +375,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle("权限被拒绝")
             .setMessage("定位权限已被永久拒绝，请在系统设置中手动开启。")
             .setPositiveButton("去设置") { _, _ ->
+                // 跳转到应用设置页面
                 val intent = Intent(
                     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.fromParts("package", packageName, null)
@@ -378,6 +390,7 @@ class MainActivity : AppCompatActivity() {
      * 请求当前位置（单次定位）
      */
     private fun requestCurrentLocation() {
+        // 检查权限
         if (!hasLocationPermission()) {
             Log.w(TAG, "没有定位权限")
             Toast.makeText(this, "请先授予定位权限", Toast.LENGTH_SHORT).show()
@@ -386,6 +399,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         try {
+            // 使用 CancellationTokenSource 进行单次定位
             val cancellationTokenSource = CancellationTokenSource()
 
             fusedLocationClient.getCurrentLocation(
@@ -396,7 +410,8 @@ class MainActivity : AppCompatActivity() {
             }.addOnFailureListener { exception ->
                 Log.e(TAG, "获取位置失败", exception)
                 showError("获取位置失败: ${exception.message}")
-                // 失败时降级为获取最后已知位置
+
+                // 获取当前位置失败时，降级为最后已知位置
                 getLastKnownLocation()
             }
         } catch (e: SecurityException) {
@@ -547,6 +562,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             isContinuousTracking -> {
+                // 正在持续定位时，提示用户确认退出
                 AlertDialog.Builder(this)
                     .setTitle("退出应用")
                     .setMessage("正在进行位置跟踪，确定要退出吗？")
@@ -580,7 +596,11 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "应用销毁")
+
+        // 停止定位更新
         stopContinuousLocationUpdates()
+
+        // 清理 WebView
         webView.destroy()
     }
 }
