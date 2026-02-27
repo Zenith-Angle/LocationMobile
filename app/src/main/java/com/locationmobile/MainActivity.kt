@@ -22,7 +22,10 @@ import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
-import com.example.locationmobile.R
+
+// ★ 修复：R 文件包名与 namespace 保持一致，不需要显式导入
+// 因为 MainActivity 和 R 在同一个包 com.locationmobile.app 下，
+// build.gradle 的 namespace 改为 com.locationmobile.app 后自动可用
 
 /**
  * LocationMobile - 主活动
@@ -276,12 +279,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) -> {
-                // 用户之前拒绝过权限，显示说明对话框
                 showPermissionRationaleDialog()
             }
 
             else -> {
-                // 直接请求权限
                 requestLocationPermission()
             }
         }
@@ -353,7 +354,6 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     Log.w(TAG, "定位权限被拒绝")
                     if (!shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)) {
-                        // 用户选择了"不再询问"
                         showPermissionDeniedDialog()
                     } else {
                         Toast.makeText(
@@ -375,7 +375,6 @@ class MainActivity : AppCompatActivity() {
             .setTitle("权限被拒绝")
             .setMessage("定位权限已被永久拒绝，请在系统设置中手动开启。")
             .setPositiveButton("去设置") { _, _ ->
-                // 跳转到应用设置页面
                 val intent = Intent(
                     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.fromParts("package", packageName, null)
@@ -390,7 +389,6 @@ class MainActivity : AppCompatActivity() {
      * 请求当前位置（单次定位）
      */
     private fun requestCurrentLocation() {
-        // 检查权限
         if (!hasLocationPermission()) {
             Log.w(TAG, "没有定位权限")
             Toast.makeText(this, "请先授予定位权限", Toast.LENGTH_SHORT).show()
@@ -399,7 +397,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         try {
-            // 使用 CancellationTokenSource 进行单次定位
             val cancellationTokenSource = CancellationTokenSource()
 
             fusedLocationClient.getCurrentLocation(
@@ -410,8 +407,6 @@ class MainActivity : AppCompatActivity() {
             }.addOnFailureListener { exception ->
                 Log.e(TAG, "获取位置失败", exception)
                 showError("获取位置失败: ${exception.message}")
-
-                // 获取当前位置失败时，降级为最后已知位置
                 getLastKnownLocation()
             }
         } catch (e: SecurityException) {
@@ -523,7 +518,6 @@ class MainActivity : AppCompatActivity() {
             "位置更新: 经度=$longitude, 纬度=$latitude, 海拔=$altitude, 精度=$accuracy"
         )
 
-        // 调用网页中的 JavaScript 函数更新地图
         val updateType = if (isSingleUpdate) "single" else "continuous"
         val script =
             "flyToLocation($longitude, $latitude, $altitude, $accuracy, '$updateType')"
@@ -562,7 +556,6 @@ class MainActivity : AppCompatActivity() {
             }
 
             isContinuousTracking -> {
-                // 正在持续定位时，提示用户确认退出
                 AlertDialog.Builder(this)
                     .setTitle("退出应用")
                     .setMessage("正在进行位置跟踪，确定要退出吗？")
@@ -596,11 +589,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "应用销毁")
-
-        // 停止定位更新
         stopContinuousLocationUpdates()
-
-        // 清理 WebView
         webView.destroy()
     }
 }
