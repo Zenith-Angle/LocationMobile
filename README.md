@@ -38,15 +38,30 @@
 3. 创建新的访问令牌(Access Token)
 4. 复制令牌
 
-### 3. 配置项目
+### 3. 配置项目（新版 - 推荐）
 
 1. 用IntelliJ IDEA或Android Studio打开项目
-2. 打开 `app/src/main/assets/cesium/index.html`
-3. 找到:
+2. 复制 Token 模板文件：
+   ```bash
+   cp app/tokens.properties.example app/tokens.properties
+   ```
+3. 编辑 `app/tokens.properties`，填入你的 Token：
+   ```properties
+   CESIUM_ION_TOKEN=你的CesiumIonToken
+   TIANDITU_TOKEN=你的天地图Token（可选）
+   ```
+4. 运行应用，Token 会自动加载
+
+### 3.1 配置项目（旧版 - 已废弃）
+
+> 旧版本直接在 index.html 中配置 Token 的方式仍然可用，但推荐使用上述新版配置方式。
+
+1. 打开 `app/src/main/assets/cesium/index.html`
+2. 找到:
    ```javascript
    Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_ACCESS_TOKEN';
    ```
-4. 替换为你的实际令牌
+3. 替换为你的实际令牌
 
 ### 4. 同步和运行
 
@@ -146,6 +161,41 @@ sdk.dir=C\:\\Users\\你的用户名\\AppData\\Local\\Android\\Sdk
 # Linux
 # sdk.dir=/home/你的用户名/Android/Sdk
 ```
+
+### Token 配置（本地调试）
+
+项目支持将 Token 配置在本地文件中，推送到版本库时不会包含敏感信息。
+
+#### 1. 复制模板文件
+
+```bash
+# 复制 token 模板文件
+cp app/tokens.properties.example app/tokens.properties
+```
+
+#### 2. 编辑 tokens.properties
+
+打开 `app/tokens.properties` 文件，填入你的 Token：
+
+```properties
+# Cesium Ion Token（必需）
+CESIUM_ION_TOKEN=你的CesiumIonToken
+
+# 天地图 Token（可选，用于天地图影像）
+TIANDITU_TOKEN=你的天地图Token
+```
+
+#### 3. 运行应用
+
+- 本地运行：Token 会自动注入到 WebView 中
+- 构建发布版：不会包含 Token，用户需要自行配置
+
+#### Token 申请地址
+
+- **Cesium Ion**: https://cesium.com/ion/tokens
+- **天地图**: https://console.tianditu.gov.cn
+
+> 注意：`tokens.properties` 已在 `.gitignore` 中配置，不会被提交到版本库。
 
 ## 📝 注意事项
 

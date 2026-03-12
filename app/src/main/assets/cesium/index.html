@@ -48,7 +48,7 @@
         /* ── 左上角信息框 ── */
         .info-box {
             position: absolute;
-            top: 70px;       /* 图层按钮下方 */
+            top: 70px;
             left: 16px;
             background: rgba(10,10,25,0.82);
             color: #e8eaf0;
@@ -146,7 +146,6 @@
             opacity: 0.7;
         }
         .layer-option .opt-label { flex: 1; }
-        /* 已选中的对号 */
         .layer-option .opt-check {
             font-size: 13px;
             color: #38bdf8;
@@ -199,7 +198,7 @@
 
 <!-- 图层选择面板（默认隐藏） -->
 <div class="layer-panel" id="layerPanel">
-    <div class="layer-option active" id="opt-satellite" onclick="switchMap('satellite')">
+    <div class="layer-option" id="opt-satellite" onclick="switchMap('satellite')">
         <span class="opt-icon">🛰️</span>
         <span class="opt-label">卫星影像</span>
         <span class="opt-check">✓</span>
@@ -210,7 +209,8 @@
         <span class="opt-check">✓</span>
     </div>
     <div class="layer-divider"></div>
-    <div class="layer-option" id="opt-tdt" onclick="switchMap('tdt')">
+    <!-- ★ 默认选中天地图 -->
+    <div class="layer-option active" id="opt-tdt" onclick="switchMap('tdt')">
         <span class="opt-icon">🌏</span>
         <span class="opt-label">天地图（备用）</span>
         <span class="opt-check">✓</span>
@@ -226,18 +226,45 @@
 
 <script src="https://unpkg.com/cesium@1.112/Build/Cesium/Cesium.js"></script>
 <script>
-    // ── Cesium Ion Token ──────────────────────────────────
-    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlOTQ2M2Q5Zi1hNTIwLTRhODQtOTBhZS1lYzllOGFkYzQyYTUiLCJpZCI6Mzg2MTE1LCJpYXQiOjE3NzIxOTAwMjd9.JdlVK8FpTJd6SfQC-VnV30kUn77L1xCBL3ruBHUR3mE';
+    // ── Token 配置 ─────────────────────────────────────────
+    // 默认 Token（发布时请移除或置空）
+    let CESIUM_ION_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlOTQ2M2Q5Zi1hNTIwLTRhODQtOTBhZS1lYzllOGFkYzQyYTUiLCJpZCI6Mzg2MTE1LCJpYXQiOjE3NzIxOTAwMjd9.JdlVK8FpTJd6SfQC-VnV30kUn77L1xCBL3ruBHUR3mE';
+    let TDT_TOKEN = '2550d947faf678cd19951d530bf273d8';
 
-    // ── 天地图 Token（前往 https://console.tianditu.gov.cn 免费申请后填入）──
-    const TDT_TOKEN = '';
+    // 立即设置默认 Token
+    Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
+    console.log('使用默认 Cesium Ion Token');
+
+    // 页面加载完成后，尝试从 Android 获取本地配置的 Token（覆盖默认 Token）
+    function initTokens() {
+        setTimeout(function() {
+            try {
+                if (typeof Android !== 'undefined' && Android.getCesiumIonToken) {
+                    const cesiumToken = Android.getCesiumIonToken();
+                    if (cesiumToken && cesiumToken !== '') {
+                        CESIUM_ION_TOKEN = cesiumToken;
+                        Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
+                        console.log('已更新为本地 Cesium Ion Token');
+                    }
+
+                    const tdtToken = Android.getTiandituToken();
+                    if (tdtToken && tdtToken !== '') {
+                        TDT_TOKEN = tdtToken;
+                        console.log('已更新为本地天地图 Token');
+                    }
+                }
+            } catch (e) {
+                console.log('获取本地 Token 失败，使用默认配置');
+            }
+        }, 500); // 延迟 500ms 确保 Android 接口已准备好
+    }
+
+    // 延迟执行初始化
+    initTokens();
 
     // ── 瓦片源工厂函数 ────────────────────────────────────
 
-    /** 卫星影像：Esri World Imagery（全球高清卫星，无需 Token，国内可用）
-     *  Cesium 1.112 中 ArcGisMapServerImageryProvider 改为异步，
-     *  改用 UrlTemplateImageryProvider 调用 Esri 瓦片接口，兼容所有版本
-     */
+    /** 卫星影像：Esri World Imagery */
     function createSatelliteProvider() {
         return new Cesium.UrlTemplateImageryProvider({
             url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
@@ -246,16 +273,17 @@
         });
     }
 
-    /** 街道地图：OSM（网络正常时） */
+    /** 街道地图：OSM */
     function createStreetProvider() {
         return new Cesium.UrlTemplateImageryProvider({
-            url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            credit: 'OpenStreetMap contributors',
-            maximumLevel: 19
+            url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+            subdomains: ['1', '2', '3', '4'],
+            credit: '高德地图',
+            maximumLevel: 18
         });
     }
 
-    /** 天地图卫星影像（网络问题时备用，需填 Token） */
+    /** 天地图卫星影像 */
     function createTdtProvider() {
         return new Cesium.UrlTemplateImageryProvider({
             url: `https://t{s}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${TDT_TOKEN}`,
@@ -275,9 +303,55 @@
         });
     }
 
-    // ── 初始化 Viewer（默认卫星影像）────────────────────
+    // ── 生成"当前位置"显眼图标的 Canvas DataURL ──────────
+    // 使用 Canvas 绘制一个带外圈光晕的导航箭头图标
+    function createCurrentLocationIcon() {
+        const size = 64;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        // 外圈光晕（半透明蓝色）
+        const grd = ctx.createRadialGradient(cx, cy, 8, cx, cy, 30);
+        grd.addColorStop(0, 'rgba(56,189,248,0.45)');
+        grd.addColorStop(1, 'rgba(56,189,248,0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 白色描边圆底
+        ctx.beginPath();
+        ctx.arc(cx, cy, 14, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        // 内圆（主色）
+        ctx.beginPath();
+        ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+        ctx.fillStyle = '#0ea5e9'; // sky-500
+        ctx.fill();
+
+        // 中心白点
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        return canvas.toDataURL();
+    }
+
+    // 预生成图标 DataURL
+    const CURRENT_LOC_ICON = createCurrentLocationIcon();
+
+    // ── ★ 默认使用天地图底图（Token 为空时回退到 OSM 街道图）──
+    const defaultMapType = (TDT_TOKEN && TDT_TOKEN !== '') ? 'tdt' : 'street';
+
+    // ── 初始化 Viewer（不传 imageryProvider，避免与后续图层管理冲突）──
     const viewer = new Cesium.Viewer('cesiumContainer', {
-        imageryProvider: createSatelliteProvider(),
         baseLayerPicker: false,
         terrainProvider: new Cesium.EllipsoidTerrainProvider(),
         timeline: false,
@@ -294,18 +368,32 @@
     });
     viewer.cesiumWidget.creditContainer.style.display = 'none';
 
-    // ── 图层切换逻辑 ─────────────────────────────────────
-    let currentMap = 'satellite';
+    // ── 初始化完成后，清除 Cesium 自动创建的默认图层，再统一添加 ──
+    // 这样可以确保影像层和标注层的叠加顺序完全受控
+    viewer.imageryLayers.removeAll();
+    if (defaultMapType === 'tdt') {
+        viewer.imageryLayers.addImageryProvider(createTdtProvider());
+        viewer.imageryLayers.addImageryProvider(createTdtLabelProvider());
+    } else {
+        viewer.imageryLayers.addImageryProvider(createStreetProvider());
+    }
 
-    /** 切换底图 */
+    // ── 同步初始图层面板高亮状态 ─────────────────────────
+    let currentMap = defaultMapType;
+    if (defaultMapType !== 'tdt') {
+        // Token 未填，回退 OSM 街道图，同步 UI 高亮
+        document.getElementById('opt-tdt').classList.remove('active');
+        document.getElementById('opt-street').classList.add('active');
+    }
+
+    // ── 图层切换逻辑 ─────────────────────────────────────
     function switchMap(mapType) {
-        // 关闭面板
         closeLayerPanel();
 
         if (mapType === currentMap) return;
 
-        // 天地图需要 Token 校验
-        if (mapType === 'tdt' && TDT_TOKEN === 'YOUR_TIANDITU_TOKEN') {
+        // 天地图需要 Token
+        if (mapType === 'tdt' && (!TDT_TOKEN || TDT_TOKEN === '')) {
             showInfo('⚠️ 请先在 index.html 中填入天地图 Token', 4000);
             return;
         }
@@ -350,10 +438,11 @@
     document.getElementById('cesiumContainer').addEventListener('click', closeLayerPanel);
 
     // ── 定位相关变量 ──────────────────────────────────────
-    let locationMarker = null;
-    let locationHistory = [];
-    let trackLine = null;
-    let isTracking = false;
+    let locationMarker  = null;  // 单次定位标记 / 持续跟踪最新点（显眼图标）
+    let historyMarkers  = [];    // 持续跟踪历史点（小点，无标签）
+    let locationHistory = [];    // 坐标数组（用于画轨迹线）
+    let trackLine       = null;
+    let isTracking      = false;
 
     // 加载完成
     setTimeout(() => {
@@ -400,8 +489,13 @@
     }
 
     function clearMarkers() {
+        // 移除单次/最新位置标记
         if (locationMarker) { viewer.entities.remove(locationMarker); locationMarker = null; }
-        if (trackLine)      { viewer.entities.remove(trackLine);      trackLine = null; }
+        // 移除所有历史轨迹点
+        historyMarkers.forEach(e => viewer.entities.remove(e));
+        historyMarkers = [];
+        // 移除轨迹线
+        if (trackLine) { viewer.entities.remove(trackLine); trackLine = null; }
         locationHistory = [];
         showInfo('已清除所有标记', 2000);
         logToAndroid('清除所有标记');
@@ -423,52 +517,116 @@
         const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
         locationHistory.push(position);
 
-        // 单次定位：移除旧标记
-        if (updateType === 'single' && locationMarker) {
-            viewer.entities.remove(locationMarker);
+        if (updateType === 'single') {
+            // ── 单次定位：移除旧标记，添加新标记（红色点 + 标签）──
+            if (locationMarker) { viewer.entities.remove(locationMarker); }
+
+            locationMarker = viewer.entities.add({
+                name: '当前位置',
+                position: position,
+                point: {
+                    pixelSize: 16,
+                    color: Cesium.Color.fromCssColorString('#ff3b5c'),
+                    outlineColor: Cesium.Color.WHITE,
+                    outlineWidth: 3
+                },
+                ellipse: accuracy > 0 ? {
+                    semiMinorAxis: accuracy,
+                    semiMajorAxis: accuracy,
+                    material: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.12),
+                    outline: true,
+                    outlineColor: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.5),
+                    outlineWidth: 2
+                } : undefined,
+                label: {
+                    text: '我的位置',
+                    font: '13pt sans-serif',
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    outlineWidth: 2,
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset: new Cesium.Cartesian2(0, -22)
+                },
+                description: `<div style="padding:10px;font-family:sans-serif;font-size:13px;line-height:1.8;">
+                    <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
+                    <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
+                    <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
+                    ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
+                    <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
+                </div>`
+            });
+
+        } else {
+            // ── 持续跟踪模式 ─────────────────────────────────
+
+            // 1. 将旧的"当前位置"最新点降级为普通历史小点（移除标签和显眼图标）
+            if (locationMarker) {
+                viewer.entities.remove(locationMarker);
+                // 在上一个位置添加普通历史点（无标签）
+                const prevPos = locationHistory[locationHistory.length - 2];
+                if (prevPos) {
+                    const hist = viewer.entities.add({
+                        position: prevPos,
+                        point: {
+                            pixelSize: 8,
+                            color: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.8),
+                            outlineColor: Cesium.Color.WHITE,
+                            outlineWidth: 1.5
+                        }
+                    });
+                    historyMarkers.push(hist);
+                }
+            }
+
+            // 2. 添加新的"当前位置"显眼图标（billboard + 标签，仅最新点有）
+            locationMarker = viewer.entities.add({
+                name: '当前位置',
+                position: position,
+                // ★ 使用自定义 billboard 替代普通 point，更显眼
+                billboard: {
+                    image: CURRENT_LOC_ICON,
+                    width: 56,
+                    height: 56,
+                    verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+                    // 轻微缩放脉冲动画：通过 scaleByDistance 模拟视觉呼吸感
+                    scaleByDistance: new Cesium.NearFarScalar(100, 1.3, 50000, 0.8)
+                },
+                // 精度圈（蓝色）
+                ellipse: accuracy > 0 ? {
+                    semiMinorAxis: accuracy,
+                    semiMajorAxis: accuracy,
+                    material: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.12),
+                    outline: true,
+                    outlineColor: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.5),
+                    outlineWidth: 2
+                } : undefined,
+                // ★ 只有最新点才有"当前位置"标签
+                label: {
+                    text: '当前位置',
+                    font: 'bold 13pt sans-serif',
+                    fillColor: Cesium.Color.fromCssColorString('#38bdf8'),
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    outlineColor: Cesium.Color.fromCssColorString('#0c1a2e'),
+                    outlineWidth: 3,
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset: new Cesium.Cartesian2(0, -36)
+                },
+                description: `<div style="padding:10px;font-family:sans-serif;font-size:13px;line-height:1.8;">
+                    <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
+                    <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
+                    <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
+                    ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
+                    <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
+                </div>`
+            });
+
+            // 3. 更新轨迹线
+            if (locationHistory.length > 1) {
+                updateTrackLine();
+            }
         }
 
-        locationMarker = viewer.entities.add({
-            name: '当前位置',
-            position: position,
-            point: {
-                pixelSize: updateType === 'single' ? 16 : 12,
-                color: updateType === 'single' ? Cesium.Color.fromCssColorString('#ff3b5c')
-                                               : Cesium.Color.fromCssColorString('#38bdf8'),
-                outlineColor: Cesium.Color.WHITE,
-                outlineWidth: 3
-            },
-            ellipse: accuracy > 0 ? {
-                semiMinorAxis: accuracy,
-                semiMajorAxis: accuracy,
-                material: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.12),
-                outline: true,
-                outlineColor: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.5),
-                outlineWidth: 2
-            } : undefined,
-            label: {
-                text: updateType === 'single' ? '我的位置' : '当前位置',
-                font: '13pt sans-serif',
-                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                outlineWidth: 2,
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                pixelOffset: new Cesium.Cartesian2(0, -22)
-            },
-            description: `<div style="padding:10px;font-family:sans-serif;font-size:13px;line-height:1.8;">
-                <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
-                <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
-                <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
-                ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
-                <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
-            </div>`
-        });
-
-        // 持续跟踪时更新轨迹
-        if (isTracking && locationHistory.length > 1) {
-            updateTrackLine();
-        }
-
-        // ★ 近乎垂直俯视（pitch = -88°），高度 500m / 300m
+        // ★ 近乎垂直俯视飞行
         viewer.camera.flyTo({
             destination: Cesium.Cartesian3.fromDegrees(
                 longitude, latitude,

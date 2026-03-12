@@ -22,6 +22,8 @@ import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
+import java.io.File
+import java.util.Properties
 
 // ★ 修复：R 文件包名与 namespace 保持一致，不需要显式导入
 // 因为 MainActivity 和 R 在同一个包 com.locationmobile.app 下，
@@ -65,11 +67,18 @@ class MainActivity : AppCompatActivity() {
     // 访问路径：https://appassets.androidplatform.net/assets/cesium/index.html
     private lateinit var assetLoader: WebViewAssetLoader
 
+    // 本地 Token 配置（从 tokens.properties 读取）
+    private var cesiumIonToken: String = ""
+    private var tiandituToken: String = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         Log.d(TAG, "LocationMobile 应用启动")
+
+        // 加载本地 Token 配置
+        loadLocalTokens()
 
         // 初始化定位客户端
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -97,6 +106,82 @@ class MainActivity : AppCompatActivity() {
         }.build()
 
         Log.d(TAG, "定位请求配置已初始化")
+    }
+
+    /**
+     * 加载本地 Token 配置
+     * 从 app/tokens.properties 读取 Cesium Ion 和天地图 Token
+     */
+    private fun loadLocalTokens() {
+        try {
+            val tokensFile = File(filesDir, "../app/tokens.properties")
+            if (tokensFile.exists()) {
+                val properties = Properties()
+                tokensFile.inputStream().use { properties.load(it) }
+                cesiumIonToken = properties.getProperty("CESIUM_ION_TOKEN", "")
+                tiandituToken = properties.getProperty("TIANDITU_TOKEN", "")
+                Log.d(TAG, "已加载本地 Token 配置")
+            } else {
+                // 尝试从 assets 目录读取
+                try {
+                    val assetsInputStream = assets.open("tokens.properties")
+                    val properties = Properties()
+                    properties.load(assetsInputStream)
+                    cesiumIonToken = properties.getProperty("CESIUM_ION_TOKEN", "")
+                    tiandituToken = properties.getProperty("TIANDITU_TOKEN", "")
+                    Log.d(TAG, "已从 assets 加载 Token 配置")
+                } catch (e: Exception) {
+                    Log.d(TAG, "未找到 tokens.properties，将使用无 Token 模式")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "加载 Token 失败: ${e.message}")
+        }
+
+        // 调试日志（生产环境可删除）
+        if (cesiumIonToken.isNotEmpty()) {
+            Log.d(TAG, "Cesium Ion Token: 已配置")
+        } else {
+            Log.d(TAG, "Cesium Ion Token: 未配置")
+        }
+        if (tiandituToken.isNotEmpty()) {
+            Log.d(TAG, "天地图 Token: 已配置")
+        } else {
+            Log.d(TAG, "天地图 Token: 未配置")
+        }
+    }
+
+    /**
+     * 注入 Token 到 WebView
+     * 在页面加载完成后调用，将本地配置的 Token 注入到 JavaScript 环境
+     */
+    private fun injectTokens() {
+        if (cesiumIonToken.isNotEmpty() || tiandituToken.isNotEmpty()) {
+            val cesiumToken = if (cesiumIonToken.isNotEmpty()) "'$cesiumIonToken'" else "null"
+            val tdtToken = if (tiandituToken.isNotEmpty()) "'$tiandituToken'" else "null"
+
+            val script = """
+                (function() {
+                    if ($cesiumToken !== null) {
+                        Cesium.Ion.defaultAccessToken = $cesiumToken;
+                    }
+                    if ($tdtToken !== null) {
+                        window.TDT_TOKEN = $tdtToken;
+                        // 重新初始化天地图提供商
+                        if (typeof window.switchMap === 'function') {
+                            // 刷新当前地图
+                        }
+                    }
+                    console.log('Token 注入完成');
+                })();
+            """.trimIndent()
+
+            webView.evaluateJavascript(script) { result ->
+                Log.d(TAG, "Token 注入结果: $result")
+            }
+        } else {
+            Log.d(TAG, "无本地 Token，跳过注入")
+        }
     }
 
     /**
@@ -164,6 +249,9 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.d(TAG, "页面加载完成: $url")
+
+                // 页面加载完成后，注入本地 Token 配置
+                injectTokens()
             }
 
             override fun onReceivedError(
@@ -266,6 +354,22 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun log(message: String) {
             Log.d(TAG, "网页日志: $message")
+        }
+
+        /**
+         * 供网页调用：获取 Cesium Ion Token
+         */
+        @JavascriptInterface
+        fun getCesiumIonToken(): String {
+            return cesiumIonToken
+        }
+
+        /**
+         * 供网页调用：获取天地图 Token
+         */
+        @JavascriptInterface
+        fun getTiandituToken(): String {
+            return tiandituToken
         }
     }
 
