@@ -3,25 +3,56 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def tokenProps = new Properties()
+def tokenFile = rootProject.file("app/tokens.properties")
+if (tokenFile.exists()) {
+    tokenFile.withInputStream { tokenProps.load(it) }
+}
+
+def escapeForBuildConfig = { value ->
+    (value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 android {
 
     namespace 'com.locationmobile.app'
     compileSdk 34
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId "com.locationmobile.app"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1.3"
+
+        // release 默认不携带 token，避免密钥随生产包分发
+        buildConfigField "String", "CESIUM_ION_TOKEN", "\"\""
+        buildConfigField "String", "TIANDITU_TOKEN", "\"\""
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            buildConfigField "String", "CESIUM_ION_TOKEN", "\"${escapeForBuildConfig(tokenProps.getProperty("CESIUM_ION_TOKEN", ""))}\""
+            buildConfigField "String", "TIANDITU_TOKEN", "\"${escapeForBuildConfig(tokenProps.getProperty("TIANDITU_TOKEN", ""))}\""
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 自定义 APK 输出名称
+    android.applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "LocationMobile-v${versionName}-${variant.name}.apk"
         }
     }
 

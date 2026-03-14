@@ -1,0 +1,19 @@
+# =============================================
+# 本地 Token 配置文件
+# =============================================
+# 此文件用于本地调试，请勿提交到版本控制系统！
+# 已经在 .gitignore 中配置会被忽略
+#
+# 使用方法：
+# 1. 复制此文件并重命名为 tokens.properties
+# 2. 填入你的 Cesium Ion 和天地图 Token
+# 3. 运行应用进行本地调试
+# =============================================
+
+# Cesium Ion Token（必需）
+# 申请地址：https://cesium.com/ion/tokens
+# CESIUM_ION_TOKEN=你的CesiumToken
+
+# 天地图 Token（可选，用于天地图影像）
+# 申请地址：https://console.tianditu.gov.cn
+# TIANDITU_TOKEN=你的天地图Token

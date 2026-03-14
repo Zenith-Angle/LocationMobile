@@ -22,8 +22,7 @@ import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
-import java.io.File
-import java.util.Properties
+import org.json.JSONObject
 
 // ★ 修复：R 文件包名与 namespace 保持一致，不需要显式导入
 // 因为 MainActivity 和 R 在同一个包 com.locationmobile.app 下，
@@ -109,34 +108,47 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 动态更新定位请求间隔
+     * @param isInBackground 是否在后台运行，true表示减半频率（间隔加倍）
+     */
+    private fun updateLocationRequestInterval(isInBackground: Boolean) {
+        // 获取当前的基础间隔和最快间隔
+        val backgroundInterval = LOCATION_UPDATE_INTERVAL * 2  // 后台时间隔加倍（频率减半）
+        val backgroundFastestInterval = LOCATION_FASTEST_INTERVAL * 2  // 后台时最快间隔也加倍
+
+        // 创建新的LocationRequest
+        val newRequest = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            if (isInBackground) backgroundInterval else LOCATION_UPDATE_INTERVAL
+        ).apply {
+            setMinUpdateIntervalMillis(
+                if (isInBackground) backgroundFastestInterval else LOCATION_FASTEST_INTERVAL
+            )
+            setWaitForAccurateLocation(false)
+        }.build()
+
+        // 更新全局的locationRequest变量
+        locationRequest = newRequest
+
+        // 如果正在进行持续定位，需要停止并重新开始以应用新的间隔
+        if (isContinuousTracking) {
+            stopContinuousLocationUpdates()
+            startContinuousLocationUpdates()
+            
+            val mode = if (isInBackground) "后台" else "前台"
+            val interval = if (isInBackground) backgroundInterval else LOCATION_UPDATE_INTERVAL
+            Log.d(TAG, "已切换到${mode}模式，定位间隔更新为${interval}ms")
+        }
+    }
+
+    /**
      * 加载本地 Token 配置
-     * 从 app/tokens.properties 读取 Cesium Ion 和天地图 Token
+     * 从 BuildConfig 读取构建期注入的 Token
      */
     private fun loadLocalTokens() {
-        try {
-            val tokensFile = File(filesDir, "../app/tokens.properties")
-            if (tokensFile.exists()) {
-                val properties = Properties()
-                tokensFile.inputStream().use { properties.load(it) }
-                cesiumIonToken = properties.getProperty("CESIUM_ION_TOKEN", "")
-                tiandituToken = properties.getProperty("TIANDITU_TOKEN", "")
-                Log.d(TAG, "已加载本地 Token 配置")
-            } else {
-                // 尝试从 assets 目录读取
-                try {
-                    val assetsInputStream = assets.open("tokens.properties")
-                    val properties = Properties()
-                    properties.load(assetsInputStream)
-                    cesiumIonToken = properties.getProperty("CESIUM_ION_TOKEN", "")
-                    tiandituToken = properties.getProperty("TIANDITU_TOKEN", "")
-                    Log.d(TAG, "已从 assets 加载 Token 配置")
-                } catch (e: Exception) {
-                    Log.d(TAG, "未找到 tokens.properties，将使用无 Token 模式")
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "加载 Token 失败: ${e.message}")
-        }
+        cesiumIonToken = BuildConfig.CESIUM_ION_TOKEN.trim()
+        tiandituToken = BuildConfig.TIANDITU_TOKEN.trim()
+        Log.d(TAG, "Token 来源: BuildConfig")
 
         // 调试日志（生产环境可删除）
         if (cesiumIonToken.isNotEmpty()) {
@@ -156,31 +168,21 @@ class MainActivity : AppCompatActivity() {
      * 在页面加载完成后调用，将本地配置的 Token 注入到 JavaScript 环境
      */
     private fun injectTokens() {
-        if (cesiumIonToken.isNotEmpty() || tiandituToken.isNotEmpty()) {
-            val cesiumToken = if (cesiumIonToken.isNotEmpty()) "'$cesiumIonToken'" else "null"
-            val tdtToken = if (tiandituToken.isNotEmpty()) "'$tiandituToken'" else "null"
-
-            val script = """
-                (function() {
-                    if ($cesiumToken !== null) {
-                        Cesium.Ion.defaultAccessToken = $cesiumToken;
-                    }
-                    if ($tdtToken !== null) {
-                        window.TDT_TOKEN = $tdtToken;
-                        // 重新初始化天地图提供商
-                        if (typeof window.switchMap === 'function') {
-                            // 刷新当前地图
-                        }
-                    }
+        val cesiumToken = JSONObject.quote(cesiumIonToken)
+        val tdtToken = JSONObject.quote(tiandituToken)
+        val script = """
+            (function() {
+                if (typeof window.applyNativeTokens === 'function') {
+                    window.applyNativeTokens($cesiumToken, $tdtToken);
                     console.log('Token 注入完成');
-                })();
-            """.trimIndent()
+                } else {
+                    console.warn('applyNativeTokens 未就绪');
+                }
+            })();
+        """.trimIndent()
 
-            webView.evaluateJavascript(script) { result ->
-                Log.d(TAG, "Token 注入结果: $result")
-            }
-        } else {
-            Log.d(TAG, "无本地 Token，跳过注入")
+        webView.evaluateJavascript(script) { result ->
+            Log.d(TAG, "Token 注入结果: $result")
         }
     }
 
@@ -214,9 +216,9 @@ class MainActivity : AppCompatActivity() {
             // 数据库存储
             databaseEnabled = true
 
-            // 支持缩放
-            setSupportZoom(true)
-            builtInZoomControls = true
+            // 关闭 WebView 自身缩放，避免拦截地图滚轮事件
+            setSupportZoom(false)
+            builtInZoomControls = false
             displayZoomControls = false
 
             // 自适应屏幕
@@ -356,21 +358,6 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "网页日志: $message")
         }
 
-        /**
-         * 供网页调用：获取 Cesium Ion Token
-         */
-        @JavascriptInterface
-        fun getCesiumIonToken(): String {
-            return cesiumIonToken
-        }
-
-        /**
-         * 供网页调用：获取天地图 Token
-         */
-        @JavascriptInterface
-        fun getTiandituToken(): String {
-            return tiandituToken
-        }
     }
 
     /**
@@ -679,12 +666,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        Log.d(TAG, "应用暂停")
+        Log.d(TAG, "应用暂停 - 检测到进入后台")
+        // 应用进入后台时，将定位频率减半（间隔加倍）
+        if (isContinuousTracking) {
+            updateLocationRequestInterval(isInBackground = true)
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "应用恢复")
+        Log.d(TAG, "应用恢复 - 检测到返回前台")
+        // 应用返回前台时，恢复正常定位频率
+        if (isContinuousTracking) {
+            updateLocationRequestInterval(isInBackground = false)
+        }
     }
 
     /**
