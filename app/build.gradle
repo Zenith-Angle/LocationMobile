@@ -26,8 +26,8 @@ android {
         applicationId "com.locationmobile.app"
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName "1.1.3"
+        versionCode 3
+        versionName "1.2.0"
 
         // release 默认不携带 token，避免密钥随生产包分发
         buildConfigField "String", "CESIUM_ION_TOKEN", "\"\""
