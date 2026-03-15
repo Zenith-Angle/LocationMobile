@@ -18,6 +18,8 @@ local.properties
 tokens.properties
 app/tokens.properties
 **/tokens.properties
+app/keystore.properties
+**/keystore.properties
 *.apk
 *.ap_
 *.dex

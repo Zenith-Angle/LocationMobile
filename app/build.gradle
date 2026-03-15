@@ -9,6 +9,25 @@ if (tokenFile.exists()) {
     tokenFile.withInputStream { tokenProps.load(it) }
 }
 
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file("app/keystore.properties")
+if (keystoreFile.exists()) {
+    keystoreFile.withInputStream { keystoreProps.load(it) }
+}
+
+def readSigningValue = { String propKey, String envKey ->
+    def envVal = System.getenv(envKey)
+    if (envVal != null && envVal.toString().trim()) {
+        return envVal.toString().trim()
+    }
+    return keystoreProps.getProperty(propKey, "").trim()
+}
+
+def releaseStoreFile = readSigningValue("storeFile", "LM_STORE_FILE")
+def releaseStorePassword = readSigningValue("storePassword", "LM_STORE_PASSWORD")
+def releaseKeyAlias = readSigningValue("keyAlias", "LM_KEY_ALIAS")
+def releaseKeyPassword = readSigningValue("keyPassword", "LM_KEY_PASSWORD")
+
 def escapeForBuildConfig = { value ->
     (value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
 }
@@ -36,6 +55,20 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        release {
+            if (releaseStoreFile) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
@@ -44,6 +77,12 @@ android {
             buildConfigField "String", "TIANDITU_TOKEN", "\"${escapeForBuildConfig(tokenProps.getProperty("TIANDITU_TOKEN", ""))}\""
         }
         release {
+            if (!releaseStoreFile || !releaseStorePassword || !releaseKeyAlias || !releaseKeyPassword) {
+                throw new GradleException(
+                    "Missing release signing config. Set env vars LM_STORE_FILE/LM_STORE_PASSWORD/LM_KEY_ALIAS/LM_KEY_PASSWORD or provide app/keystore.properties."
+                )
+            }
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
