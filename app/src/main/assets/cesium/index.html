@@ -64,6 +64,66 @@
         }
         .info-box.show { display: block; }
 
+        /* ── 右侧中部：轨迹节点显示开关 ── */
+        .track-node-panel {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 1003;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(10,10,25,0.84);
+            border: 1px solid rgba(255,255,255,0.14);
+            color: #e8eaf0;
+            font-size: 13px;
+            font-weight: 600;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+            user-select: none;
+        }
+        .track-node-title {
+            font-size: 12px;
+            line-height: 1;
+        }
+        .switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            display: inline-block;
+        }
+        .switch input { display: none; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background-color: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            transition: 0.2s;
+        }
+        .slider:before {
+            content: '';
+            position: absolute;
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            top: 3px;
+            background-color: white;
+            border-radius: 50%;
+            transition: 0.2s;
+        }
+        .switch input:checked + .slider {
+            background-color: rgba(56, 189, 248, 0.85);
+        }
+        .switch input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+
         /* ── 图层按钮（左上角入口） ── */
         .layer-btn {
             position: absolute;
@@ -215,6 +275,14 @@
         <span class="opt-label">天地图（备用）</span>
         <span class="opt-check">✓</span>
     </div>
+</div>
+
+<div class="track-node-panel" id="trackNodePanel">
+    <span class="track-node-title">轨迹节点</span>
+    <label class="switch">
+        <input type="checkbox" id="trackNodeSwitch" checked onchange="toggleTrackNodeVisibility()">
+        <span class="slider"></span>
+    </label>
 </div>
 
 <!-- 底部三按钮并排 -->
@@ -400,11 +468,17 @@
     document.getElementById('cesiumContainer').addEventListener('click', closeLayerPanel);
 
     // ── 定位相关变量 ──────────────────────────────────────
-    let locationMarker  = null;  // 单次定位标记 / 持续跟踪最新点（显眼图标）
-    let historyMarkers  = [];    // 持续跟踪历史点（小点，无标签）
-    let locationHistory = [];    // 坐标数组（用于画轨迹线）
-    let trackLine       = null;
-    let isTracking      = false;
+    let currentLocationMarker = null; // 实时当前位置（红色大点）
+    let processMarkers = [];          // 轨迹节点（抽稀后的小点）
+    let rawTrackPositions = [];       // 所有采样点（用于画线）
+    let sampledTrackPoints = [];      // 已绘制轨迹节点（经纬度）
+    let trackLine = null;
+    let isTracking = false;
+    let showTrackNodes = true;
+
+    const SLOW_MARKER_DISTANCE_METERS = 50;
+    const FAST_MARKER_DISTANCE_METERS = 500;
+    const FAST_SPEED_THRESHOLD_MPS = 8.0; // 约 28.8 km/h
 
     // 加载完成
     setTimeout(() => {
@@ -434,9 +508,11 @@
         if (!isTracking) {
             if (typeof Android !== 'undefined' && Android.startTracking) {
                 Android.startTracking();
+                resetTrackSession();
                 isTracking = true;
                 btn.textContent = '⏸️ 停止跟踪';
                 btn.classList.add('tracking-on');
+                setTrackNodePanelVisible(true);
                 showInfo('开始位置跟踪', 2000);
             }
         } else {
@@ -445,6 +521,7 @@
                 isTracking = false;
                 btn.textContent = '🎯 开始跟踪';
                 btn.classList.remove('tracking-on');
+                setTrackNodePanelVisible(false);
                 showInfo('停止位置跟踪', 2000);
             }
         }
@@ -452,15 +529,88 @@
 
     function clearMarkers() {
         // 移除单次/最新位置标记
-        if (locationMarker) { viewer.entities.remove(locationMarker); locationMarker = null; }
-        // 移除所有历史轨迹点
-        historyMarkers.forEach(e => viewer.entities.remove(e));
-        historyMarkers = [];
+        if (currentLocationMarker) {
+            viewer.entities.remove(currentLocationMarker);
+            currentLocationMarker = null;
+        }
+        // 移除所有轨迹节点
+        processMarkers.forEach(e => viewer.entities.remove(e));
+        processMarkers = [];
         // 移除轨迹线
         if (trackLine) { viewer.entities.remove(trackLine); trackLine = null; }
-        locationHistory = [];
+        rawTrackPositions = [];
+        sampledTrackPoints = [];
         showInfo('已清除所有标记', 2000);
         logToAndroid('清除所有标记');
+    }
+
+    function setTrackNodePanelVisible(visible) {
+        document.getElementById('trackNodePanel').style.display = visible ? 'flex' : 'none';
+    }
+
+    function toggleTrackNodeVisibility() {
+        showTrackNodes = document.getElementById('trackNodeSwitch').checked;
+        processMarkers.forEach(marker => { marker.show = showTrackNodes; });
+    }
+
+    function resetTrackSession() {
+        processMarkers.forEach(e => viewer.entities.remove(e));
+        processMarkers = [];
+        sampledTrackPoints = [];
+        rawTrackPositions = [];
+        if (trackLine) {
+            viewer.entities.remove(trackLine);
+            trackLine = null;
+        }
+    }
+
+    function getSurfaceDistanceMeters(lon1, lat1, lon2, lat2) {
+        const from = Cesium.Cartographic.fromDegrees(lon1, lat1);
+        const to = Cesium.Cartographic.fromDegrees(lon2, lat2);
+        const geodesic = new Cesium.EllipsoidGeodesic(from, to);
+        return geodesic.surfaceDistance || 0;
+    }
+
+    function getMarkerDistanceThreshold(speedMps) {
+        return speedMps >= FAST_SPEED_THRESHOLD_MPS
+            ? FAST_MARKER_DISTANCE_METERS
+            : SLOW_MARKER_DISTANCE_METERS;
+    }
+
+    function maybeAddProcessMarker(longitude, latitude, altitude, speedMps) {
+        const threshold = getMarkerDistanceThreshold(speedMps);
+
+        if (sampledTrackPoints.length === 0) {
+            addProcessMarker(longitude, latitude, altitude);
+            sampledTrackPoints.push({ longitude, latitude });
+            return;
+        }
+
+        const lastPoint = sampledTrackPoints[sampledTrackPoints.length - 1];
+        const distance = getSurfaceDistanceMeters(
+            lastPoint.longitude,
+            lastPoint.latitude,
+            longitude,
+            latitude
+        );
+        if (distance >= threshold) {
+            addProcessMarker(longitude, latitude, altitude);
+            sampledTrackPoints.push({ longitude, latitude });
+        }
+    }
+
+    function addProcessMarker(longitude, latitude, altitude) {
+        const marker = viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude),
+            show: showTrackNodes,
+            point: {
+                pixelSize: 7,
+                color: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.85),
+                outlineColor: Cesium.Color.WHITE,
+                outlineWidth: 1.2
+            }
+        });
+        processMarkers.push(marker);
     }
 
     // ── 位置更新与飞行 ────────────────────────────────────
@@ -473,17 +623,16 @@
      * @param {number} accuracy
      * @param {string} updateType  'single' | 'continuous'
      */
-    function flyToLocation(longitude, latitude, altitude, accuracy = 0, updateType = 'single') {
-        console.log(`位置更新: ${longitude}, ${latitude}, alt=${altitude}, acc=${accuracy}, type=${updateType}`);
+    function flyToLocation(longitude, latitude, altitude, accuracy = 0, speed = 0, updateType = 'single') {
+        console.log(`位置更新: ${longitude}, ${latitude}, alt=${altitude}, acc=${accuracy}, speed=${speed}, type=${updateType}`);
 
         const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
-        locationHistory.push(position);
 
         if (updateType === 'single') {
             // ── 单次定位：移除旧标记，添加新标记（红色点 + 标签）──
-            if (locationMarker) { viewer.entities.remove(locationMarker); }
+            if (currentLocationMarker) { viewer.entities.remove(currentLocationMarker); }
 
-            locationMarker = viewer.entities.add({
+            currentLocationMarker = viewer.entities.add({
                 name: '当前位置',
                 position: position,
                 point: {
@@ -519,51 +668,34 @@
 
         } else {
             // ── 持续跟踪模式 ─────────────────────────────────
+            rawTrackPositions.push(position);
+            maybeAddProcessMarker(longitude, latitude, altitude, speed);
 
-            // 1. 将旧的"当前位置"最新点降级为普通历史小点（移除标签和显眼图标）
-            if (locationMarker) {
-                viewer.entities.remove(locationMarker);
-                // 在上一个位置添加普通历史点（无标签）
-                const prevPos = locationHistory[locationHistory.length - 2];
-                if (prevPos) {
-                    const hist = viewer.entities.add({
-                        position: prevPos,
-                        point: {
-                            pixelSize: 8,
-                            color: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.8),
-                            outlineColor: Cesium.Color.WHITE,
-                            outlineWidth: 1.5
-                        }
-                    });
-                    historyMarkers.push(hist);
-                }
+            // 实时位置点：每次都清掉旧点并新建（红色大点）
+            if (currentLocationMarker) {
+                viewer.entities.remove(currentLocationMarker);
             }
-
-            // 2. 添加新的"当前位置"显眼图标（billboard + 标签，仅最新点有）
-            locationMarker = viewer.entities.add({
+            currentLocationMarker = viewer.entities.add({
                 name: '当前位置',
                 position: position,
-                // 使用纯 point 样式，避免叠加外部图标
                 point: {
                     pixelSize: 18,
-                    color: Cesium.Color.fromCssColorString('#38bdf8'),
+                    color: Cesium.Color.fromCssColorString('#ff3b5c'),
                     outlineColor: Cesium.Color.WHITE,
                     outlineWidth: 3
                 },
-                // 精度圈（蓝色）
                 ellipse: accuracy > 0 ? {
                     semiMinorAxis: accuracy,
                     semiMajorAxis: accuracy,
-                    material: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.12),
+                    material: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.12),
                     outline: true,
-                    outlineColor: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.5),
+                    outlineColor: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.5),
                     outlineWidth: 2
                 } : undefined,
-                // ★ 只有最新点才有"当前位置"标签
                 label: {
                     text: '当前位置',
                     font: 'bold 13pt sans-serif',
-                    fillColor: Cesium.Color.fromCssColorString('#38bdf8'),
+                    fillColor: Cesium.Color.fromCssColorString('#ff3b5c'),
                     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                     outlineColor: Cesium.Color.fromCssColorString('#0c1a2e'),
                     outlineWidth: 3,
@@ -574,13 +706,13 @@
                     <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
                     <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
                     <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
+                    <p><strong>速度：</strong>${(speed * 3.6).toFixed(1)} km/h</p>
                     ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
                     <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
                 </div>`
             });
 
-            // 3. 更新轨迹线
-            if (locationHistory.length > 1) {
+            if (rawTrackPositions.length > 1) {
                 updateTrackLine();
             }
         }
@@ -616,7 +748,7 @@
         trackLine = viewer.entities.add({
             name: '移动轨迹',
             polyline: {
-                positions: locationHistory,
+                positions: rawTrackPositions,
                 width: 4,
                 material: new Cesium.PolylineGlowMaterialProperty({
                     glowPower: 0.3,
