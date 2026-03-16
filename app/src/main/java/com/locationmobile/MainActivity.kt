@@ -221,7 +221,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        WebView.setWebContentsDebuggingEnabled(true)
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         webView.addJavascriptInterface(WebAppInterface(), "Android")
         webView.loadUrl("https://appassets.androidplatform.net/assets/cesium/index.html")
     }
