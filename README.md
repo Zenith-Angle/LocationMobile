@@ -9,7 +9,7 @@
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-1.9.22-7F52FF?logo=kotlin&logoColor=white">
   <img alt="Cesium" src="https://img.shields.io/badge/Cesium.js-1.112-6CADDF">
   <img alt="minSdk" src="https://img.shields.io/badge/minSdk-26-blue">
-  <img alt="License" src="https://img.shields.io/badge/license-not%20specified-lightgrey">
+  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue">
 </p>
 
 LocationMobile 是一个基于 **Kotlin + Android WebView + Cesium.js** 的移动定位应用。它通过 Google Play Services 获取设备定位，在本地 Cesium 三维地球页面中实时展示当前位置、精度范围和移动轨迹，适合用于学习 Android 定位权限、前台服务、WebView 与三维地图可视化协作。
@@ -325,9 +325,7 @@ docs: improve readme
 
 ## 许可证
 
-当前仓库尚未包含独立 `LICENSE` 文件。若计划正式开源发布，建议补充明确许可证（例如 MIT、Apache-2.0 等）并同步更新本节内容。
-
-在未声明许可证前，请默认遵循“仅供学习和参考使用，保留所有权利”。
+本项目基于 [Apache License 2.0](./LICENSE) 开源。你可以在遵守许可证条款的前提下自由使用、复制、修改和分发本项目。
 
 ## 致谢
 
