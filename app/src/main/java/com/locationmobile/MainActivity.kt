@@ -1,10 +1,15 @@
 package com.locationmobile.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.net.Uri
 import android.os.Build
@@ -17,7 +22,10 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -27,26 +35,45 @@ import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import org.json.JSONArray
 import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
+import java.io.StringReader
+import java.time.Instant
+import java.time.format.DateTimeParseException
+import java.util.Locale
+import kotlin.math.max
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), SensorEventListener {
 
     companion object {
         private const val TAG = "LocationMobile"
         private const val REQUEST_FOREGROUND_LOCATION = 1001
         private const val REQUEST_BACKGROUND_LOCATION = 1002
         private const val REQUEST_NOTIFICATIONS = 1003
+        private const val MENU_IMPORT_GPX = 2001
+        private const val MENU_IMPORT_GEOJSON = 2002
+        private const val MENU_EXPORT_GPX = 2003
+        private const val MENU_EXPORT_GEOJSON = 2004
+        private const val DEFAULT_EXPORT_FILE_NAME = "LocationMobile-track"
     }
 
     private lateinit var webView: WebView
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var assetLoader: WebViewAssetLoader
+    private lateinit var sensorManager: SensorManager
 
     private var cesiumIonToken: String = ""
     private var tiandituToken: String = ""
     private var isContinuousTracking = false
     private var pendingStartTracking = false
     private var locationReceiverRegistered = false
+    private var webPageReady = false
+    private var pendingCachedTrackSync = false
+    private var pressureSensor: Sensor? = null
+    private var latestBarometerAltitude: Double? = null
+    private var pendingExportFormat: String? = null
 
     private val locationUpdateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
@@ -58,11 +85,51 @@ class MainActivity : AppCompatActivity() {
             if (latitude.isNaN() || longitude.isNaN()) {
                 return
             }
-            val altitude = intent.getDoubleExtra(LocationForegroundService.EXTRA_ALTITUDE, 0.0)
+            val gpsAltitude = intent.getNullableDoubleExtra(
+                LocationForegroundService.EXTRA_GPS_ALTITUDE
+            )
+            val barometerAltitude = intent.getNullableDoubleExtra(
+                LocationForegroundService.EXTRA_BAROMETER_ALTITUDE
+            )
             val accuracy = intent.getFloatExtra(LocationForegroundService.EXTRA_ACCURACY, 0f)
             val speed = intent.getFloatExtra(LocationForegroundService.EXTRA_SPEED, 0f)
-            pushLocationToWeb(longitude, latitude, altitude, accuracy, speed, "continuous")
+            val timestamp = intent.getLongExtra(
+                LocationForegroundService.EXTRA_TIMESTAMP,
+                System.currentTimeMillis()
+            )
+            val point = TrackPoint(
+                latitude = latitude,
+                longitude = longitude,
+                gpsAltitude = gpsAltitude,
+                barometerAltitude = barometerAltitude,
+                accuracy = accuracy,
+                speed = speed,
+                timestamp = timestamp
+            )
+            pushLocationToWeb(point, updateType = "continuous", shouldFly = false)
         }
+    }
+
+    private val importTrackLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) {
+            return@registerForActivityResult
+        }
+        val uri = result.data?.data ?: return@registerForActivityResult
+        importTrackFromUri(uri)
+    }
+
+    private val exportTrackLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val format = pendingExportFormat
+        pendingExportFormat = null
+        if (result.resultCode != Activity.RESULT_OK || format == null) {
+            return@registerForActivityResult
+        }
+        val uri = result.data?.data ?: return@registerForActivityResult
+        requestTrackPayloadForExport(format, uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +138,8 @@ class MainActivity : AppCompatActivity() {
 
         loadLocalTokens()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        pressureSensor = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE)
         setupWebView()
         checkLocationPermission()
         syncTrackingState()
@@ -88,26 +157,57 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        registerPressureSensor()
         syncTrackingState()
         if (pendingStartTracking) {
             continuePendingTrackingStartIfPossible()
         }
-        LocationForegroundService.getLastLocation(this)?.let { snapshot ->
-            pushLocationToWeb(
-                longitude = snapshot.longitude,
-                latitude = snapshot.latitude,
-                altitude = snapshot.altitude,
-                accuracy = snapshot.accuracy,
-                speed = snapshot.speed,
-                updateType = "continuous"
-            )
-        }
+        syncCachedTrackToWeb()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterPressureSensor()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (::webView.isInitialized) {
             webView.destroy()
+        }
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(Menu.NONE, MENU_IMPORT_GPX, Menu.NONE, "导入 GPX")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        menu.add(Menu.NONE, MENU_IMPORT_GEOJSON, Menu.NONE, "导入 GeoJSON")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        menu.add(Menu.NONE, MENU_EXPORT_GPX, Menu.NONE, "导出 GPX")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        menu.add(Menu.NONE, MENU_EXPORT_GEOJSON, Menu.NONE, "导出 GeoJSON")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            MENU_IMPORT_GPX -> {
+                openTrackImportPicker("gpx")
+                true
+            }
+            MENU_IMPORT_GEOJSON -> {
+                openTrackImportPicker("geojson")
+                true
+            }
+            MENU_EXPORT_GPX -> {
+                openTrackExportPicker("gpx")
+                true
+            }
+            MENU_EXPORT_GEOJSON -> {
+                openTrackExportPicker("geojson")
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
         }
     }
 
@@ -194,7 +294,12 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                webPageReady = true
                 injectTokens()
+                if (pendingCachedTrackSync || isContinuousTracking) {
+                    pendingCachedTrackSync = false
+                    syncCachedTrackToWeb()
+                }
             }
 
             override fun onReceivedError(
@@ -240,6 +345,16 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun stopTracking() {
             runOnUiThread { stopContinuousLocationUpdates() }
+        }
+
+        @JavascriptInterface
+        fun importTrack(format: String) {
+            runOnUiThread { openTrackImportPicker(format) }
+        }
+
+        @JavascriptInterface
+        fun exportTrack(format: String) {
+            runOnUiThread { openTrackExportPicker(format) }
         }
 
         @JavascriptInterface
@@ -490,6 +605,7 @@ class MainActivity : AppCompatActivity() {
         }
         val intent = Intent(this, LocationForegroundService::class.java).apply {
             action = LocationForegroundService.ACTION_START
+            putExtra(LocationForegroundService.EXTRA_RESET_TRACK, true)
         }
         ContextCompat.startForegroundService(this, intent)
 
@@ -534,13 +650,19 @@ class MainActivity : AppCompatActivity() {
             showError("无法获取位置信息")
             return
         }
-        pushLocationToWeb(
-            longitude = location.longitude,
+        val point = TrackPoint(
             latitude = location.latitude,
-            altitude = location.altitude,
+            longitude = location.longitude,
+            gpsAltitude = if (location.hasAltitude()) location.altitude else null,
+            barometerAltitude = latestBarometerAltitude,
             accuracy = location.accuracy,
             speed = location.speed,
-            updateType = if (isSingleUpdate) "single" else "continuous"
+            timestamp = location.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+        )
+        pushLocationToWeb(
+            point = point,
+            updateType = if (isSingleUpdate) "single" else "continuous",
+            shouldFly = isSingleUpdate
         )
 
         if (isSingleUpdate) {
@@ -553,16 +675,398 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pushLocationToWeb(
-        longitude: Double,
-        latitude: Double,
-        altitude: Double,
-        accuracy: Float,
-        speed: Float,
-        updateType: String
+        point: TrackPoint,
+        updateType: String,
+        shouldFly: Boolean
     ) {
-        val script = "flyToLocation($longitude, $latitude, $altitude, $accuracy, $speed, '$updateType')"
+        if (!webPageReady) {
+            pendingCachedTrackSync = true
+            return
+        }
+        val payload = point.toWebJson().apply {
+            put("updateType", updateType)
+            put("shouldFly", shouldFly)
+        }
+        val script = "window.applyLocationUpdate(${payload.toString()})"
         webView.evaluateJavascript(script) { result ->
             Log.v(TAG, "JavaScript 执行结果: $result")
+        }
+    }
+
+    private fun pushTrackBatchToWeb(points: List<TrackPoint>, replace: Boolean) {
+        if (points.isEmpty()) {
+            return
+        }
+        if (!webPageReady) {
+            pendingCachedTrackSync = true
+            return
+        }
+        val payload = JSONObject().apply {
+            put("replace", replace)
+            put("points", JSONArray().also { array ->
+                points.forEach { array.put(it.toWebJson()) }
+            })
+        }
+        val script = "window.applyTrackBatch(${payload.toString()})"
+        webView.evaluateJavascript(script) { result ->
+            Log.v(TAG, "轨迹批量同步结果: $result")
+        }
+    }
+
+    private fun syncCachedTrackToWeb() {
+        val points = LocationForegroundService.getTrackPoints(this)
+        if (points.isNotEmpty()) {
+            pushTrackBatchToWeb(points, replace = true)
+            return
+        }
+        LocationForegroundService.getLastLocation(this)?.let { snapshot ->
+            pushLocationToWeb(
+                point = TrackPoint(
+                    latitude = snapshot.latitude,
+                    longitude = snapshot.longitude,
+                    gpsAltitude = snapshot.gpsAltitude,
+                    barometerAltitude = snapshot.barometerAltitude,
+                    accuracy = snapshot.accuracy,
+                    speed = snapshot.speed,
+                    timestamp = snapshot.timestamp
+                ),
+                updateType = "continuous",
+                shouldFly = false
+            )
+        }
+    }
+
+    private fun TrackPoint.toWebJson(): JSONObject {
+        return JSONObject().apply {
+            put("longitude", longitude)
+            put("latitude", latitude)
+            putNullableDouble("gpsAltitude", gpsAltitude)
+            putNullableDouble("barometerAltitude", barometerAltitude)
+            put("accuracy", accuracy.toDouble())
+            put("speed", speed.toDouble())
+            put("timestamp", timestamp)
+        }
+    }
+
+    private fun openTrackImportPicker(format: String) {
+        val mimeTypes = when (format.lowercase(Locale.US)) {
+            "gpx" -> arrayOf("application/gpx+xml", "text/xml", "application/xml", "*/*")
+            "geojson" -> arrayOf("application/geo+json", "application/json", "*/*")
+            else -> arrayOf("application/gpx+xml", "application/geo+json", "application/json", "*/*")
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+        }
+        importTrackLauncher.launch(intent)
+    }
+
+    private fun openTrackExportPicker(format: String) {
+        val normalizedFormat = format.lowercase(Locale.US)
+        val mimeType = when (normalizedFormat) {
+            "gpx" -> "application/gpx+xml"
+            "geojson" -> "application/geo+json"
+            else -> {
+                Toast.makeText(this, "不支持的导出格式", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+        pendingExportFormat = normalizedFormat
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mimeType
+            putExtra(Intent.EXTRA_TITLE, "$DEFAULT_EXPORT_FILE_NAME.$normalizedFormat")
+        }
+        exportTrackLauncher.launch(intent)
+    }
+
+    private fun requestTrackPayloadForExport(format: String, uri: Uri) {
+        val script = "window.exportTrack(${JSONObject.quote(format)})"
+        webView.evaluateJavascript(script) { result ->
+            val payload = parseJavascriptStringResult(result)
+            if (payload.isNullOrBlank()) {
+                Toast.makeText(this, "没有可导出的轨迹", Toast.LENGTH_SHORT).show()
+                return@evaluateJavascript
+            }
+            writeTextToUri(uri, payload)
+        }
+    }
+
+    private fun writeTextToUri(uri: Uri, payload: String) {
+        try {
+            contentResolver.openOutputStream(uri, "wt")?.use { stream ->
+                stream.write(payload.toByteArray(Charsets.UTF_8))
+            } ?: throw IllegalStateException("无法打开输出文件")
+            Toast.makeText(this, "轨迹导出完成", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "导出轨迹失败", e)
+            showError("导出轨迹失败: ${e.message}")
+        }
+    }
+
+    private fun importTrackFromUri(uri: Uri) {
+        try {
+            val content = contentResolver.openInputStream(uri)
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText() }
+                ?: throw IllegalStateException("无法读取轨迹文件")
+            val points = parseTrackContent(content)
+            if (points.isEmpty()) {
+                showError("轨迹文件中没有有效点")
+                return
+            }
+            pushTrackBatchToWeb(points, replace = true)
+            Toast.makeText(this, "已导入 ${points.size} 个轨迹点", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "导入轨迹失败", e)
+            showError("导入轨迹失败: ${e.message}")
+        }
+    }
+
+    private fun parseTrackContent(content: String): List<TrackPoint> {
+        val trimmed = content.trim()
+        return when {
+            trimmed.startsWith("{") -> parseGeoJsonTrack(trimmed)
+            trimmed.startsWith("[") -> parseGeoJsonTrack(trimmed)
+            trimmed.startsWith("<") -> parseGpxTrack(trimmed)
+            else -> emptyList()
+        }
+    }
+
+    private fun parseGeoJsonTrack(content: String): List<TrackPoint> {
+        if (content.trim().startsWith("[")) {
+            val coordinates = JSONArray(content)
+            return mutableListOf<TrackPoint>().also { points ->
+                collectGeoJsonCoordinates(coordinates, JSONObject(), points)
+            }
+        }
+        val root = JSONObject(content)
+        val features = when (root.optString("type")) {
+            "FeatureCollection" -> root.optJSONArray("features") ?: JSONArray()
+            "Feature" -> JSONArray().put(root)
+            else -> JSONArray().put(JSONObject().put("geometry", root))
+        }
+        val points = mutableListOf<TrackPoint>()
+        for (featureIndex in 0 until features.length()) {
+            val feature = features.optJSONObject(featureIndex) ?: continue
+            val geometry = feature.optJSONObject("geometry") ?: continue
+            val properties = feature.optJSONObject("properties") ?: JSONObject()
+            when (geometry.optString("type")) {
+                "LineString" -> collectGeoJsonCoordinates(
+                    geometry.optJSONArray("coordinates"),
+                    properties,
+                    points
+                )
+                "MultiLineString" -> {
+                    val lines = geometry.optJSONArray("coordinates") ?: continue
+                    for (lineIndex in 0 until lines.length()) {
+                        collectGeoJsonCoordinates(lines.optJSONArray(lineIndex), properties, points)
+                    }
+                }
+                "Point" -> coordinateToTrackPoint(
+                    geometry.optJSONArray("coordinates"),
+                    properties,
+                    points.size
+                )?.let { points.add(it) }
+            }
+        }
+        return points
+    }
+
+    private fun collectGeoJsonCoordinates(
+        coordinates: JSONArray?,
+        properties: JSONObject,
+        points: MutableList<TrackPoint>
+    ) {
+        if (coordinates == null) {
+            return
+        }
+        for (index in 0 until coordinates.length()) {
+            coordinateToTrackPoint(
+                coordinate = coordinates.optJSONArray(index),
+                properties = properties,
+                index = points.size
+            )?.let { points.add(it) }
+        }
+    }
+
+    private fun coordinateToTrackPoint(
+        coordinate: JSONArray?,
+        properties: JSONObject,
+        index: Int
+    ): TrackPoint? {
+        if (coordinate == null || coordinate.length() < 2) {
+            return null
+        }
+        val longitude = coordinate.optDouble(0, Double.NaN)
+        val latitude = coordinate.optDouble(1, Double.NaN)
+        if (longitude.isNaN() || latitude.isNaN()) {
+            return null
+        }
+        val propertyPoints = properties.optJSONArray("points")
+        val pointProps = propertyPoints?.optJSONObject(index)
+        return TrackPoint(
+            latitude = latitude,
+            longitude = longitude,
+            gpsAltitude = if (coordinate.length() > 2) coordinate.optDouble(2) else
+                pointProps?.optNullableDouble("gpsAltitude")
+                    ?: properties.optNullableDouble("gpsAltitude"),
+            barometerAltitude = pointProps?.optNullableDouble("barometerAltitude")
+                ?: properties.optNullableDouble("barometerAltitude"),
+            accuracy = (
+                pointProps?.optDouble("accuracy", Double.NaN)
+                    ?: properties.optDouble("accuracy", Double.NaN)
+                ).takeUnless { it.isNaN() }?.toFloat() ?: 0f,
+            speed = (
+                pointProps?.optDouble("speed", Double.NaN)
+                    ?: properties.optDouble("speed", Double.NaN)
+                ).takeUnless { it.isNaN() }?.toFloat() ?: 0f,
+            timestamp = pointProps?.optLong("timestamp", 0L)
+                ?.takeIf { it > 0L }
+                ?: properties.optLong("timestamp", 0L).takeIf { it > 0L }
+                ?: System.currentTimeMillis() + index
+        )
+    }
+
+    private fun parseGpxTrack(content: String): List<TrackPoint> {
+        val factory = XmlPullParserFactory.newInstance().apply {
+            isNamespaceAware = true
+        }
+        val parser = factory.newPullParser()
+        parser.setInput(StringReader(content))
+
+        val points = mutableListOf<TrackPoint>()
+        var eventType = parser.eventType
+        var currentPoint: MutableTrackPoint? = null
+        var currentTag: String? = null
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            when (eventType) {
+                XmlPullParser.START_TAG -> {
+                    val name = parser.name
+                    if (name == "trkpt" || name == "rtept" || name == "wpt") {
+                        currentPoint = MutableTrackPoint(
+                            latitude = parser.getAttributeValue(null, "lat")?.toDoubleOrNull(),
+                            longitude = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
+                        )
+                    } else if (currentPoint != null) {
+                        currentTag = name
+                    }
+                }
+                XmlPullParser.TEXT -> {
+                    val point = currentPoint
+                    val tag = currentTag
+                    if (point != null && tag != null) {
+                        val text = parser.text.trim()
+                        when (tag) {
+                            "ele" -> point.gpsAltitude = text.toDoubleOrNull()
+                            "time" -> point.timestamp = parseIsoTimeMillis(text)
+                            "barometerAltitude" -> point.barometerAltitude = text.toDoubleOrNull()
+                            "accuracy" -> point.accuracy = text.toFloatOrNull()
+                            "speed" -> point.speed = text.toFloatOrNull()
+                        }
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    val name = parser.name
+                    if (name == "trkpt" || name == "rtept" || name == "wpt") {
+                        currentPoint?.toTrackPoint(points.size)?.let { points.add(it) }
+                        currentPoint = null
+                    }
+                    currentTag = null
+                }
+            }
+            eventType = parser.next()
+        }
+        return points
+    }
+
+    private fun parseIsoTimeMillis(value: String): Long? {
+        return try {
+            Instant.parse(value).toEpochMilli()
+        } catch (_: DateTimeParseException) {
+            null
+        }
+    }
+
+    private fun parseJavascriptStringResult(result: String?): String? {
+        if (result == null || result == "null") {
+            return null
+        }
+        return runCatching {
+            JSONArray("[$result]").getString(0)
+        }.getOrNull()
+    }
+
+    private fun registerPressureSensor() {
+        val sensor = pressureSensor ?: return
+        sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+    }
+
+    private fun unregisterPressureSensor() {
+        if (::sensorManager.isInitialized) {
+            sensorManager.unregisterListener(this)
+        }
+    }
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event?.sensor?.type != Sensor.TYPE_PRESSURE || event.values.isEmpty()) {
+            return
+        }
+        val pressure = event.values[0]
+        if (pressure <= 0f) {
+            return
+        }
+        latestBarometerAltitude = SensorManager.getAltitude(
+            SensorManager.PRESSURE_STANDARD_ATMOSPHERE,
+            pressure
+        ).toDouble()
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    private fun Intent.getNullableDoubleExtra(key: String): Double? {
+        val value = getDoubleExtra(key, Double.NaN)
+        return if (value.isNaN()) null else value
+    }
+
+    private fun JSONObject.putNullableDouble(name: String, value: Double?) {
+        if (value == null || value.isNaN()) {
+            put(name, JSONObject.NULL)
+        } else {
+            put(name, value)
+        }
+    }
+
+    private fun JSONObject.optNullableDouble(name: String): Double? {
+        if (!has(name) || isNull(name)) {
+            return null
+        }
+        val value = optDouble(name, Double.NaN)
+        return if (value.isNaN()) null else value
+    }
+
+    private data class MutableTrackPoint(
+        val latitude: Double?,
+        val longitude: Double?,
+        var gpsAltitude: Double? = null,
+        var barometerAltitude: Double? = null,
+        var accuracy: Float? = null,
+        var speed: Float? = null,
+        var timestamp: Long? = null
+    ) {
+        fun toTrackPoint(index: Int): TrackPoint? {
+            val lat = latitude ?: return null
+            val lon = longitude ?: return null
+            return TrackPoint(
+                latitude = lat,
+                longitude = lon,
+                gpsAltitude = gpsAltitude,
+                barometerAltitude = barometerAltitude,
+                accuracy = max(0f, accuracy ?: 0f),
+                speed = max(0f, speed ?: 0f),
+                timestamp = timestamp ?: (System.currentTimeMillis() + index)
+            )
         }
     }
 

@@ -64,6 +64,78 @@
         }
         .info-box.show { display: block; }
 
+        /* ── 左下角定位数据面板 ── */
+        .location-panel {
+            position: absolute;
+            left: 16px;
+            bottom: 92px;
+            z-index: 1000;
+            min-width: 238px;
+            max-width: 280px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            color: #e8eaf0;
+            background: rgba(10, 10, 25, 0.84);
+            border: 1px solid rgba(255,255,255,0.13);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 6px 24px rgba(0,0,0,0.34);
+            display: none;
+            overflow: hidden;
+        }
+        .location-panel.show { display: block; }
+        .location-panel.collapsed {
+            min-width: 160px;
+            max-width: 190px;
+            padding-bottom: 10px;
+        }
+        .location-title {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border: 0;
+            background: transparent;
+            padding: 0;
+            font-size: 12px;
+            color: #93c5fd;
+            font-weight: 700;
+            margin-bottom: 8px;
+            cursor: pointer;
+            touch-action: manipulation;
+            text-align: left;
+        }
+        .location-title::after {
+            content: '收起';
+            color: rgba(232,234,240,0.66);
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .location-panel.collapsed .location-title {
+            margin-bottom: 0;
+        }
+        .location-panel.collapsed .location-title::after {
+            content: '展开';
+        }
+        .location-panel.collapsed .location-grid {
+            display: none;
+        }
+        .location-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            row-gap: 5px;
+            column-gap: 12px;
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        .location-label { color: rgba(232,234,240,0.68); }
+        .location-value {
+            color: #f8fafc;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
         /* ── 右侧中部：轨迹节点显示开关 ── */
         .track-node-panel {
             position: absolute;
@@ -235,6 +307,29 @@
             border: 1px solid rgba(255,255,255,0.1);
             letter-spacing: 0.5px;
         }
+
+        @media (max-width: 640px) {
+            .control-panel {
+                width: calc(100% - 24px);
+                bottom: 18px;
+                gap: 7px;
+            }
+            .btn {
+                flex: 1;
+                padding: 10px 8px;
+                font-size: 12px;
+            }
+            .location-panel {
+                left: 12px;
+                right: 12px;
+                bottom: 76px;
+                min-width: 0;
+                max-width: none;
+            }
+            .layer-panel {
+                max-width: calc(100% - 32px);
+            }
+        }
     </style>
 </head>
 <body>
@@ -244,6 +339,20 @@
 
 <!-- 左上角信息框 -->
 <div class="info-box" id="infoBox"></div>
+
+<!-- 左下角定位数据 -->
+<div class="location-panel" id="locationPanel">
+    <button class="location-title" onclick="toggleLocationPanel()">当前位置</button>
+    <div class="location-grid">
+        <span class="location-label">经度</span><span class="location-value" id="valueLongitude">--</span>
+        <span class="location-label">纬度</span><span class="location-value" id="valueLatitude">--</span>
+        <span class="location-label">GPS 高程</span><span class="location-value" id="valueGpsAltitude">--</span>
+        <span class="location-label">气压高程</span><span class="location-value" id="valueBarometerAltitude">--</span>
+        <span class="location-label">精度</span><span class="location-value" id="valueAccuracy">--</span>
+        <span class="location-label">速度</span><span class="location-value" id="valueSpeed">--</span>
+        <span class="location-label">时间</span><span class="location-value" id="valueTimestamp">--</span>
+    </div>
+</div>
 
 <!-- 图层入口按钮 -->
 <button class="layer-btn" id="layerBtn" onclick="toggleLayerPanel()">
@@ -353,9 +462,9 @@
         vrButton: false,
         geocoder: false,
         homeButton: true,
-        infoBox: true,
+        infoBox: false,
         sceneModePicker: true,
-        selectionIndicator: true,
+        selectionIndicator: false,
         navigationHelpButton: false,
         navigationInstructionsInitiallyVisible: false
     });
@@ -471,6 +580,7 @@
     let currentLocationMarker = null; // 实时当前位置（红色大点）
     let processMarkers = [];          // 轨迹节点（抽稀后的小点）
     let rawTrackPositions = [];       // 所有采样点（用于画线）
+    let trackPoints = [];             // 结构化轨迹数据（导入导出使用）
     let sampledTrackPoints = [];      // 已绘制轨迹节点（经纬度）
     let trackLine = null;
     let isTracking = false;
@@ -501,6 +611,10 @@
         } else {
             showInfo('请在 LocationMobile 应用中使用此功能', 3000);
         }
+    }
+
+    function toggleLocationPanel() {
+        document.getElementById('locationPanel').classList.toggle('collapsed');
     }
 
     function toggleTracking() {
@@ -539,7 +653,9 @@
         // 移除轨迹线
         if (trackLine) { viewer.entities.remove(trackLine); trackLine = null; }
         rawTrackPositions = [];
+        trackPoints = [];
         sampledTrackPoints = [];
+        updateLocationPanel(null);
         showInfo('已清除所有标记', 2000);
         logToAndroid('清除所有标记');
     }
@@ -558,6 +674,7 @@
         processMarkers = [];
         sampledTrackPoints = [];
         rawTrackPositions = [];
+        trackPoints = [];
         if (trackLine) {
             viewer.entities.remove(trackLine);
             trackLine = null;
@@ -615,141 +732,227 @@
 
     // ── 位置更新与飞行 ────────────────────────────────────
 
-    /**
-     * 由 Android 原生调用：更新位置标记并飞行
-     * @param {number} longitude
-     * @param {number} latitude
-     * @param {number} altitude
-     * @param {number} accuracy
-     * @param {string} updateType  'single' | 'continuous'
-     */
-    function flyToLocation(longitude, latitude, altitude, accuracy = 0, speed = 0, updateType = 'single') {
-        console.log(`位置更新: ${longitude}, ${latitude}, alt=${altitude}, acc=${accuracy}, speed=${speed}, type=${updateType}`);
+    function normalizePoint(payload) {
+        const longitude = Number(payload.longitude);
+        const latitude = Number(payload.latitude);
+        if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+            return null;
+        }
+        const gpsAltitude = Number.isFinite(Number(payload.gpsAltitude))
+            ? Number(payload.gpsAltitude)
+            : null;
+        const barometerAltitude = Number.isFinite(Number(payload.barometerAltitude))
+            ? Number(payload.barometerAltitude)
+            : null;
+        return {
+            longitude,
+            latitude,
+            gpsAltitude,
+            barometerAltitude,
+            accuracy: Number.isFinite(Number(payload.accuracy)) ? Number(payload.accuracy) : 0,
+            speed: Number.isFinite(Number(payload.speed)) ? Number(payload.speed) : 0,
+            timestamp: Number.isFinite(Number(payload.timestamp)) ? Number(payload.timestamp) : Date.now()
+        };
+    }
 
-        const position = Cesium.Cartesian3.fromDegrees(longitude, latitude, altitude);
+    function altitudeForCesium(point) {
+        return Number.isFinite(point.gpsAltitude) ? point.gpsAltitude : 0;
+    }
 
-        if (updateType === 'single') {
-            // ── 单次定位：移除旧标记，添加新标记（红色点 + 标签）──
-            if (currentLocationMarker) { viewer.entities.remove(currentLocationMarker); }
+    function pointToCartesian(point) {
+        return Cesium.Cartesian3.fromDegrees(
+            point.longitude,
+            point.latitude,
+            altitudeForCesium(point)
+        );
+    }
 
+    function formatMeters(value) {
+        return Number.isFinite(value) ? `${value.toFixed(1)} 米` : '不可用';
+    }
+
+    function formatTimestamp(timestamp) {
+        if (!Number.isFinite(timestamp) || timestamp <= 0) {
+            return '--';
+        }
+        return new Date(timestamp).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    }
+
+    function updateLocationPanel(point) {
+        const panel = document.getElementById('locationPanel');
+        if (!point) {
+            panel.classList.remove('show');
+            return;
+        }
+        document.getElementById('valueLongitude').textContent = point.longitude.toFixed(6);
+        document.getElementById('valueLatitude').textContent = point.latitude.toFixed(6);
+        document.getElementById('valueGpsAltitude').textContent = formatMeters(point.gpsAltitude);
+        document.getElementById('valueBarometerAltitude').textContent = formatMeters(point.barometerAltitude);
+        document.getElementById('valueAccuracy').textContent = point.accuracy > 0 ? `±${point.accuracy.toFixed(0)} 米` : '--';
+        document.getElementById('valueSpeed').textContent = `${(point.speed * 3.6).toFixed(1)} km/h`;
+        document.getElementById('valueTimestamp').textContent = formatTimestamp(point.timestamp);
+        panel.classList.add('show');
+    }
+
+    function upsertCurrentMarker(point, updateType) {
+        const position = pointToCartesian(point);
+        if (!currentLocationMarker) {
             currentLocationMarker = viewer.entities.add({
                 name: '当前位置',
                 position: position,
                 point: {
-                    pixelSize: 16,
+                    pixelSize: updateType === 'single' ? 16 : 18,
                     color: Cesium.Color.fromCssColorString('#ff3b5c'),
                     outlineColor: Cesium.Color.WHITE,
-                    outlineWidth: 3
+                    outlineWidth: 3,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY
                 },
-                ellipse: accuracy > 0 ? {
-                    semiMinorAxis: accuracy,
-                    semiMajorAxis: accuracy,
-                    material: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.12),
-                    outline: true,
-                    outlineColor: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.5),
-                    outlineWidth: 2
-                } : undefined,
                 label: {
-                    text: '我的位置',
-                    font: '13pt sans-serif',
-                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                    outlineWidth: 2,
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, -22)
-                },
-                description: `<div style="padding:10px;font-family:sans-serif;font-size:13px;line-height:1.8;">
-                    <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
-                    <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
-                    <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
-                    ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
-                    <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
-                </div>`
-            });
-
-        } else {
-            // ── 持续跟踪模式 ─────────────────────────────────
-            rawTrackPositions.push(position);
-            maybeAddProcessMarker(longitude, latitude, altitude, speed);
-
-            // 实时位置点：每次都清掉旧点并新建（红色大点）
-            if (currentLocationMarker) {
-                viewer.entities.remove(currentLocationMarker);
-            }
-            currentLocationMarker = viewer.entities.add({
-                name: '当前位置',
-                position: position,
-                point: {
-                    pixelSize: 18,
-                    color: Cesium.Color.fromCssColorString('#ff3b5c'),
-                    outlineColor: Cesium.Color.WHITE,
-                    outlineWidth: 3
-                },
-                ellipse: accuracy > 0 ? {
-                    semiMinorAxis: accuracy,
-                    semiMajorAxis: accuracy,
-                    material: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.12),
-                    outline: true,
-                    outlineColor: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.5),
-                    outlineWidth: 2
-                } : undefined,
-                label: {
-                    text: '当前位置',
-                    font: 'bold 13pt sans-serif',
+                    text: updateType === 'single' ? '我的位置' : '当前位置',
+                    font: updateType === 'single' ? '13pt sans-serif' : 'bold 13pt sans-serif',
                     fillColor: Cesium.Color.fromCssColorString('#ff3b5c'),
                     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                     outlineColor: Cesium.Color.fromCssColorString('#0c1a2e'),
                     outlineWidth: 3,
                     verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, -36)
+                    pixelOffset: new Cesium.Cartesian2(0, -34),
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY
                 },
-                description: `<div style="padding:10px;font-family:sans-serif;font-size:13px;line-height:1.8;">
-                    <p><strong>经度：</strong>${longitude.toFixed(6)}</p>
-                    <p><strong>纬度：</strong>${latitude.toFixed(6)}</p>
-                    <p><strong>海拔：</strong>${altitude.toFixed(1)} 米</p>
-                    <p><strong>速度：</strong>${(speed * 3.6).toFixed(1)} km/h</p>
-                    ${accuracy > 0 ? `<p><strong>精度：</strong>±${accuracy.toFixed(0)} 米</p>` : ''}
-                    <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
-                </div>`
+                ellipse: {
+                    show: point.accuracy > 0,
+                    semiMinorAxis: Math.max(point.accuracy, 1),
+                    semiMajorAxis: Math.max(point.accuracy, 1),
+                    height: altitudeForCesium(point),
+                    material: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.12),
+                    outline: true,
+                    outlineColor: Cesium.Color.fromCssColorString('#ff3b5c').withAlpha(0.5),
+                    outlineWidth: 2
+                }
             });
-
-            if (rawTrackPositions.length > 1) {
-                updateTrackLine();
-            }
+            return;
         }
 
-        // ★ 近乎垂直俯视飞行
-        viewer.camera.flyTo({
-            destination: Cesium.Cartesian3.fromDegrees(
-                longitude, latitude,
-                altitude + (updateType === 'single' ? 500 : 300)
-            ),
-            orientation: {
-                heading: Cesium.Math.toRadians(0.0),
-                pitch:   Cesium.Math.toRadians(-88.0),
-                roll:    0.0
-            },
-            duration: updateType === 'single' ? 2.5 : 1.0
-        });
+        currentLocationMarker.position = position;
+        currentLocationMarker.description = undefined;
+        currentLocationMarker.point.pixelSize = updateType === 'single' ? 16 : 18;
+        currentLocationMarker.label.text = updateType === 'single' ? '我的位置' : '当前位置';
+        currentLocationMarker.ellipse.show = point.accuracy > 0;
+        currentLocationMarker.ellipse.semiMinorAxis = Math.max(point.accuracy, 1);
+        currentLocationMarker.ellipse.semiMajorAxis = Math.max(point.accuracy, 1);
+        currentLocationMarker.ellipse.height = altitudeForCesium(point);
+    }
+
+    function appendTrackPoint(point) {
+        trackPoints.push(point);
+        rawTrackPositions.push(pointToCartesian(point));
+        maybeAddProcessMarker(
+            point.longitude,
+            point.latitude,
+            altitudeForCesium(point),
+            point.speed
+        );
+        updateTrackLine();
+    }
+
+    function applyLocationUpdate(payload) {
+        const point = normalizePoint(payload || {});
+        if (!point) {
+            showInfo('收到无效定位数据', 2500);
+            return false;
+        }
+        const updateType = payload.updateType === 'single' ? 'single' : 'continuous';
+        console.log(`位置更新: ${point.longitude}, ${point.latitude}, type=${updateType}`);
+        updateLocationPanel(point);
+        upsertCurrentMarker(point, updateType);
+
+        if (updateType === 'continuous') {
+            appendTrackPoint(point);
+        }
+
+        if (payload.shouldFly === true) {
+            flyCameraToPoint(point, updateType);
+        }
 
         if (updateType === 'single') {
             showInfo(
-                `📍 定位成功<br>` +
-                `经度：${longitude.toFixed(5)}<br>` +
-                `纬度：${latitude.toFixed(5)}<br>` +
-                `精度：±${accuracy.toFixed(0)} 米`,
+                `定位成功<br>` +
+                `经度：${point.longitude.toFixed(5)}<br>` +
+                `纬度：${point.latitude.toFixed(5)}<br>` +
+                `精度：${point.accuracy > 0 ? `±${point.accuracy.toFixed(0)} 米` : '--'}`,
                 4000
             );
         }
+        return true;
+    }
+
+    function applyTrackBatch(payload) {
+        const points = Array.isArray(payload && payload.points)
+            ? payload.points.map(normalizePoint).filter(Boolean)
+            : [];
+        if (points.length === 0) {
+            return false;
+        }
+        if (payload.replace === true) {
+            resetTrackSession();
+        }
+        points.forEach(point => appendTrackPoint(point));
+        const latest = points[points.length - 1];
+        updateLocationPanel(latest);
+        upsertCurrentMarker(latest, 'continuous');
+        setTrackNodePanelVisible(true);
+        showInfo(`已同步 ${points.length} 个轨迹点`, 1800);
+        return true;
+    }
+
+    function flyCameraToPoint(point, updateType) {
+        viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+                point.longitude,
+                point.latitude,
+                altitudeForCesium(point) + (updateType === 'single' ? 500 : 300)
+            ),
+            orientation: {
+                heading: Cesium.Math.toRadians(0.0),
+                pitch: Cesium.Math.toRadians(-88.0),
+                roll: 0.0
+            },
+            duration: updateType === 'single' ? 2.5 : 1.0
+        });
+    }
+
+    // 兼容旧版原生调用，后续原生侧统一走 applyLocationUpdate。
+    function flyToLocation(longitude, latitude, altitude, accuracy = 0, speed = 0, updateType = 'single') {
+        return applyLocationUpdate({
+            longitude,
+            latitude,
+            gpsAltitude: altitude,
+            barometerAltitude: null,
+            accuracy,
+            speed,
+            updateType,
+            timestamp: Date.now(),
+            shouldFly: updateType === 'single'
+        });
     }
 
     /** 更新轨迹线 */
     function updateTrackLine() {
-        if (trackLine) { viewer.entities.remove(trackLine); }
+        if (rawTrackPositions.length < 2) {
+            return;
+        }
+        if (trackLine) {
+            return;
+        }
         trackLine = viewer.entities.add({
             name: '移动轨迹',
             polyline: {
-                positions: rawTrackPositions,
+                positions: new Cesium.CallbackProperty(() => rawTrackPositions, false),
                 width: 4,
+                clampToGround: false,
                 material: new Cesium.PolylineGlowMaterialProperty({
                     glowPower: 0.3,
                     color: Cesium.Color.fromCssColorString('#38bdf8')
@@ -757,6 +960,87 @@
             }
         });
     }
+
+    function exportTrack(format) {
+        if (trackPoints.length === 0) {
+            return '';
+        }
+        if (format === 'gpx') {
+            return exportTrackAsGpx();
+        }
+        if (format === 'geojson') {
+            return exportTrackAsGeoJson();
+        }
+        return '';
+    }
+
+    function xmlEscape(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    function exportTrackAsGpx() {
+        const pointXml = trackPoints.map(point => {
+            const ele = Number.isFinite(point.gpsAltitude)
+                ? `      <ele>${point.gpsAltitude.toFixed(2)}</ele>\n`
+                : '';
+            const time = `      <time>${new Date(point.timestamp).toISOString()}</time>\n`;
+            const extensions = `      <extensions>\n` +
+                `        <lm:barometerAltitude>${Number.isFinite(point.barometerAltitude) ? point.barometerAltitude.toFixed(2) : ''}</lm:barometerAltitude>\n` +
+                `        <lm:accuracy>${point.accuracy.toFixed(2)}</lm:accuracy>\n` +
+                `        <lm:speed>${point.speed.toFixed(3)}</lm:speed>\n` +
+                `      </extensions>\n`;
+            return `    <trkpt lat="${point.latitude.toFixed(8)}" lon="${point.longitude.toFixed(8)}">\n` +
+                ele + time + extensions + `    </trkpt>`;
+        }).join('\n');
+        return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<gpx version="1.1" creator="LocationMobile" xmlns="http://www.topografix.com/GPX/1/1" xmlns:lm="https://locationmobile.app/gpx/extensions">\n` +
+            `  <trk>\n` +
+            `    <name>${xmlEscape('LocationMobile Track')}</name>\n` +
+            `    <trkseg>\n${pointXml}\n    </trkseg>\n` +
+            `  </trk>\n` +
+            `</gpx>\n`;
+    }
+
+    function exportTrackAsGeoJson() {
+        const coordinates = trackPoints.map(point => {
+            const coordinate = [point.longitude, point.latitude];
+            if (Number.isFinite(point.gpsAltitude)) {
+                coordinate.push(point.gpsAltitude);
+            }
+            return coordinate;
+        });
+        const properties = {
+            source: 'LocationMobile',
+            pointCount: trackPoints.length,
+            points: trackPoints.map(point => ({
+                timestamp: point.timestamp,
+                gpsAltitude: point.gpsAltitude,
+                barometerAltitude: point.barometerAltitude,
+                accuracy: point.accuracy,
+                speed: point.speed
+            }))
+        };
+        return JSON.stringify({
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties,
+                geometry: {
+                    type: 'LineString',
+                    coordinates
+                }
+            }]
+        }, null, 2);
+    }
+
+    window.applyLocationUpdate = applyLocationUpdate;
+    window.applyTrackBatch = applyTrackBatch;
+    window.exportTrack = exportTrack;
 
     /** 信息框 */
     function showInfo(message, duration = 0) {
